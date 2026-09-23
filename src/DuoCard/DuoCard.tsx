@@ -7,7 +7,7 @@ import { BODY, INNER_SCREEN } from "./geometry";
 import { TEXELS_PER_UNIT, type HomeApp, type LinkRect } from "./content";
 import { fetchContributions } from "./github";
 import { EYE_Z, FRAME_UNITS, SHADOW_MARGIN, createRenderer, screenEdge, viewCenter, type Renderer } from "./renderer";
-import { VARIANT, modelToCss, prototypeState, scrollProgress, variantCamera, type Camera } from "./prototype/variants";
+import { VARIANT, VIEW_ASPECT, modelToCss, prototypeState, scrollProgress, variantCamera, type Camera } from "./prototype/variants";
 import "@fontsource/instrument-serif";
 import "@fontsource-variable/inter";
 import "./DuoCard.css";
@@ -375,7 +375,11 @@ export function DuoCard(props: DuoCardProps) {
   };
 
   return (
-    <div ref={rootRef} className={["duo", fullscreen && "duo--fullscreen", VARIANT === "scroll" && "duo--scroll", props.className].filter(Boolean).join(" ")}>
+    <div
+      ref={rootRef}
+      className={["duo", fullscreen && "duo--fullscreen", VARIANT === "scroll" && "duo--scroll", props.className].filter(Boolean).join(" ")}
+      style={fullscreen ? ({ "--duo-aspect": VIEW_ASPECT } as CSSProperties) : undefined}
+    >
       <div
         ref={viewportRef}
         className="duo-viewport"

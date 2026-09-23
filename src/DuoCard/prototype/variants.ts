@@ -15,9 +15,12 @@ export const VARIANTS: { key: VariantKey | null; name: string }[] = [
 const param = new URLSearchParams(location.search).get("variant");
 export const VARIANT = (VARIANTS.find((v) => v.key === param)?.key ?? null) as VariantKey | null;
 
-// The viewport's shape when the page loads. The card's geometry and textures are built once from
-// it, so a resize or a turn of the phone needs a reload.
-const aspect = Math.min(0.75, Math.max(0.4, innerWidth / innerHeight));
+// The view's shape, width / height, from the viewport when the page loads: the phone's screen. A
+// screen wider than a tablet in portrait gets a phone-shaped column in its middle. The card's
+// geometry is built once from this shape, and the view keeps it through a resize.
+const screenAspect = innerWidth / innerHeight;
+export const VIEW_ASPECT = screenAspect > 0.75 ? 0.5 : Math.max(0.4, screenAspect);
+const aspect = VIEW_ASPECT;
 
 // The inner screen's height in model units; its width stays 15.8, two pages of 7.9. Turn and
 // scroll give each page the screen's shape. Flip turns the card a quarter, so the open spread of

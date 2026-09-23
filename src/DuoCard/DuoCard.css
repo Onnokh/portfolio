@@ -30,6 +30,11 @@
 .duo--fullscreen .duo-viewport {
   position: fixed;
   inset: 0;
+  /* The shape the card was built for (see VIEW_ASPECT): the whole screen on a phone, a centred
+     column on a wider screen. */
+  width: min(100vw, calc(100dvh * var(--duo-aspect)));
+  height: min(100dvh, calc(100vw / var(--duo-aspect)));
+  margin: auto;
   touch-action: none;
 }
 
