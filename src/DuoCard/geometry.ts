@@ -2,9 +2,12 @@
 // of 15.8 × 11.1 units, a hinge axis just above the inner screen, and a cover half that folds
 // toward the camera onto the fixed half.
 
+import { SCREEN_HEIGHT } from "./prototype/variants";
+
 export const BODY = {
   halfWidth: 8.3,
-  halfHeight: 5.95,
+  // PROTOTYPE: the fullscreen variants give the screen another height (11.1 for the current card).
+  halfHeight: SCREEN_HEIGHT / 2 + 0.4,
   cornerRadius: 1.05,
   top: 0.24948,
   bottom: -0.16,
@@ -16,12 +19,12 @@ export const BODY = {
 } as const;
 
 // The inner screen spans both halves; the outer screen covers the back of the cover half.
-export const INNER_SCREEN = { x: -7.9, y: -5.55, width: 15.8, height: 11.1, radius: 0.62 } as const;
+export const INNER_SCREEN = { x: -7.9, y: -SCREEN_HEIGHT / 2, width: 15.8, height: SCREEN_HEIGHT, radius: 0.62 } as const;
 // The outside of the bent strip is the hinge, metal at every angle. Like the reference's outer
 // panel, the outer screen is part of the rigid cover and stops short of the hinge, with a black band
 // between the two: the same border as on the other sides. Its corners at the fold are square.
 const FOLD_BORDER = BODY.hingeHalfWidth + 0.2;
-export const OUTER_SCREEN = { x: -7.9, y: -5.55, width: 7.9 - FOLD_BORDER, height: 11.1, radius: 0.62 } as const;
+export const OUTER_SCREEN = { x: -7.9, y: INNER_SCREEN.y, width: 7.9 - FOLD_BORDER, height: INNER_SCREEN.height, radius: 0.62 } as const;
 
 // The front of the card as it lies on screen when closed: the outer screen, folded onto the fixed
 // half. The inside right page lays out in this same box, so everything on the front sits exactly

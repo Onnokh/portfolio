@@ -1,4 +1,5 @@
 import { DuoCard } from "./DuoCard/DuoCard";
+import { PrototypeSwitcher } from "./DuoCard/prototype/PrototypeSwitcher";
 import crew from "./assets/apps/crew-icon.webp";
 import keepmowing from "./assets/apps/keepmowing-icon.png";
 import linkedin from "./assets/apps/linkedin-icon.svg";
@@ -32,6 +33,7 @@ export function App() {
           ]}
         />
       </div>
+      <PrototypeSwitcher />
     </main>
   );
 }

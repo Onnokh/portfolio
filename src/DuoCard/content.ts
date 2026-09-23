@@ -2,6 +2,7 @@ import type { Gpu } from "vgpu";
 import { texture } from "vgpu";
 import { FRONT_PAGE, INNER_SCREEN } from "./geometry";
 import type { ContributionDay } from "./github";
+import { TURN_PAGES } from "./prototype/variants";
 
 export type HomeApp = {
   name: string;
@@ -297,9 +298,18 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, width: number) {
  * The apps under the widget, four to a row: each icon a squircle with a glass rim and a soft
  * shadow, its name under it. Returns a box per icon, in texels.
  */
-function drawApps(ctx: CanvasRenderingContext2D, left: number, width: number, top: number, content: CardContent, fonts: Fonts, { icons, wallpaper }: HomeAssets) {
+function drawApps(
+  ctx: CanvasRenderingContext2D,
+  left: number,
+  width: number,
+  top: number,
+  content: CardContent,
+  fonts: Fonts,
+  { icons, wallpaper }: HomeAssets,
+  layout: Partial<Record<keyof typeof APPS, number>> = {},
+) {
   const { px, py } = page(ctx, left);
-  const { size, columns, label, gap } = APPS;
+  const { size, columns, label, gap } = { ...APPS, ...layout };
   const spacing = (width - PAD * 2 - columns * size) / (columns - 1);
   const links: LinkRect[] = [];
   ctx.save();
@@ -378,18 +388,26 @@ function drawFront(ctx: CanvasRenderingContext2D, left: number, width: number, h
     return { left: m.actualBoundingBoxLeft / CARD_PX / 100, width: (m.actualBoundingBoxLeft + m.actualBoundingBoxRight) / CARD_PX / 100 };
   });
 
-  // At rest: one size, each word shifted left by its share of its own width.
-  const restSize = NAME.cap / cap;
+  // At rest: one size, each word shifted left by its share of its own width. PROTOTYPE: a page too
+  // short for the lines above the small print takes smaller lines.
+  const restCap = NAME.cap * Math.min(1, (height - PAD - SMALL_PRINT + NAME.bleed) / (words.length * (NAME.cap + NAME.gap)));
+  const restSize = restCap / cap;
   const rest = inks.map((ink, i) => ({
     size: restSize,
     x: -NAME_CROP[i % NAME_CROP.length] * ink.width * restSize,
-    baseline: NAME.cap - NAME.bleed + i * (NAME.cap + NAME.gap),
+    baseline: restCap - NAME.bleed + i * (restCap + NAME.gap),
   }));
   // Revealed: each word justified to the margins, the block centred above the small print.
   const GAP = 8;
-  const sizes = inks.map((ink) => (width - PAD * 2) / ink.width);
-  const block = sizes.reduce((sum, size) => sum + size * cap, 0) + GAP * (words.length - 1);
-  let y = PAD + (height - PAD * 2 - SMALL_PRINT - block) / 2;
+  // PROTOTYPE: on a page too short for the justified block, the block shrinks to fit under the
+  // corner status and stays clear of it.
+  const STATUS = 34;
+  const justified = inks.map((ink) => (width - PAD * 2) / ink.width);
+  const full = justified.reduce((sum, size) => sum + size * cap, 0);
+  const fit = Math.min(1, (height - PAD * 2 - SMALL_PRINT - STATUS - GAP * (words.length - 1)) / full);
+  const sizes = justified.map((size) => size * fit);
+  const block = full * fit + GAP * (words.length - 1);
+  let y = PAD + Math.max(fit < 1 ? STATUS : 0, (height - PAD * 2 - SMALL_PRINT - block) / 2);
   const revealed = sizes.map((size) => {
     y += size * cap;
     const baseline = y;
@@ -424,7 +442,55 @@ function drawFront(ctx: CanvasRenderingContext2D, left: number, width: number, h
 /** The left page's size in texels, which the wallpaper is blurred to. */
 const innerSize = () => [Math.round(INNER_SCREEN.width * TEXELS_PER_UNIT), Math.round(INNER_SCREEN.height * TEXELS_PER_UNIT)] as const;
 
+const makeCanvas = (width: number, height: number) => Object.assign(document.createElement("canvas"), { width, height });
+
+/**
+ * PROTOTYPE (flip): the hinge runs across the screen, so each page is drawn upright on a canvas of
+ * its own and turned a quarter into the texture. Across the screen runs the texture's height, down
+ * the screen its width. `into` is `height` texels wide and `u` is where the page starts in the
+ * texture's width.
+ */
+function turnInto(ctx: CanvasRenderingContext2D, upright: HTMLCanvasElement, u: number, height: number) {
+  ctx.setTransform(0, -1, 1, 0, u, height);
+  ctx.drawImage(upright, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+function turnRect<T extends Rect>(rect: T, u: number, height: number): T {
+  return { ...rect, x: u + rect.y, y: height - rect.x - rect.width, width: rect.height, height: rect.width };
+}
+
+function drawInnerTurned(content: CardContent, fonts: Fonts, assets: HomeAssets, reveal: number, into?: HTMLCanvasElement) {
+  const [width, height] = innerSize();
+  const canvas = into ?? makeCanvas(width, height);
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = INK;
+  ctx.fillRect(0, 0, width, height);
+  const pageWidth = height / CARD_PX;
+
+  // The top page, the inside of the cover: the home screen, packed tighter to fit its short page.
+  const home = makeCanvas(height, width / 2);
+  const homeCtx = home.getContext("2d")!;
+  if (assets.wallpaper) homeCtx.drawImage(assets.wallpaper, 0, 0);
+  else {
+    homeCtx.fillStyle = PAPER;
+    homeCtx.fillRect(0, 0, home.width, home.height);
+  }
+  const widget = drawGraph(homeCtx, 0, pageWidth, content, fonts, assets.wallpaper !== null);
+  const apps = drawApps(homeCtx, 0, pageWidth, widget.bottom + 8, content, fonts, assets, { size: 34, gap: 6 });
+  turnInto(ctx, home, 0, height);
+
+  // The bottom page repeats the front in the front's box, as in drawInner.
+  const rightX = (FRONT_PAGE.x - INNER_SCREEN.x) * TEXELS_PER_UNIT;
+  const front = makeCanvas(height, Math.round(FRONT_PAGE.width * TEXELS_PER_UNIT));
+  drawFront(front.getContext("2d")!, 0, pageWidth, front.height / CARD_PX, content, fonts, reveal, true);
+  turnInto(ctx, front, rightX, height);
+  const nameArea = turnRect({ x: 0, y: 0, width: height, height: (front.height / CARD_PX - PAD - SMALL_PRINT) * CARD_PX }, rightX, height);
+  return { canvas, links: [...widget.links, ...apps].map((link) => turnRect(link, 0, height)), nameArea };
+}
+
 function drawInner(content: CardContent, fonts: Fonts, assets: HomeAssets, reveal = 0, into?: HTMLCanvasElement) {
+  if (TURN_PAGES) return drawInnerTurned(content, fonts, assets, reveal, into);
   const [width, height] = innerSize();
   const canvas = into ?? Object.assign(document.createElement("canvas"), { width, height });
   const ctx = canvas.getContext("2d")!;
@@ -465,6 +531,12 @@ function drawOuter(content: CardContent, fonts: Fonts, reveal = 0, into?: HTMLCa
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, width, height);
+  if (TURN_PAGES) {
+    const upright = makeCanvas(height, width);
+    drawFront(upright.getContext("2d")!, 0, height / CARD_PX, width / CARD_PX, content, fonts, reveal);
+    turnInto(ctx, upright, 0, height);
+    return canvas;
+  }
   drawFront(ctx, 0, width / CARD_PX, height / CARD_PX, content, fonts, reveal);
   return canvas;
 }
@@ -516,7 +588,9 @@ export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts
     content.wallpaper ? loadImage(content.wallpaper) : null,
   ]);
   const [width, height] = innerSize();
-  const assets: HomeAssets = { icons, wallpaper: wallpaper && blurredCover(wallpaper, width / 2, height, WALLPAPER_BLUR) };
+  // The home page's wallpaper, upright: on the flip card the page is turned (see drawInnerTurned).
+  const [coverWidth, coverHeight] = TURN_PAGES ? [height, width / 2] : [width / 2, height];
+  const assets: HomeAssets = { icons, wallpaper: wallpaper && blurredCover(wallpaper, coverWidth, coverHeight, WALLPAPER_BLUR) };
   const inner = drawInner(content, fonts, assets);
   const outer = drawOuter(content, fonts);
   const innerMips = mipTexture(gpu, inner.canvas.width, inner.canvas.height, "card:inner");

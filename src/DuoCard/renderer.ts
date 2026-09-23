@@ -3,6 +3,7 @@ import { BODY, FRONT_PAGE, INNER_SCREEN, buildBody } from "./geometry";
 import { createContent, type CardContent, type Fonts } from "./content";
 import type { ContributionDay } from "./github";
 import { bodyShader, presentShader, shadowShader } from "./shaders";
+import type { Camera } from "./prototype/variants";
 
 // Camera from the reference: a fixed eye 40 units in front of the card, which is also the eye the
 // screen content is projected from.
@@ -92,6 +93,36 @@ function perspective(fovY: number, aspect: number, pan: number) {
   return m;
 }
 
+/**
+ * PROTOTYPE: the projection with a 2D camera on the card's plane (see Camera), applied in clip
+ * space like the pan, so depth and the eye stay as they are.
+ */
+function cameraProjection(fovY: number, aspect: number, camera: Camera) {
+  const p = perspective(fovY, aspect, 0);
+  const f = 1 / Math.tan(fovY / 2);
+  const d = EYE_Z - BODY.top;
+  const k = (2 * d) / (f * camera.unitsTall);
+  const ux = (f * camera.center[0]) / d;
+  const uy = (f * camera.center[1]) / d;
+  const c = Math.cos(camera.roll);
+  const s = Math.sin(camera.roll);
+  // Rows of T, acting on clip (x, y, z, w): shift, turn and scale in aspect-corrected clip space.
+  const t = [
+    [k * c, (-k * s) / aspect, 0, (k / aspect) * (-c * ux + s * uy)],
+    [k * s * aspect, k * c, 0, k * (-s * ux - c * uy)],
+    [0, 0, 1, 0],
+    [0, 0, 0, 1],
+  ];
+  const m = new Float32Array(16);
+  for (let col = 0; col < 4; col++)
+    for (let row = 0; row < 4; row++) {
+      let sum = 0;
+      for (let i = 0; i < 4; i++) sum += t[row][i] * p[col * 4 + i];
+      m[col * 4 + row] = sum;
+    }
+  return m;
+}
+
 export type Renderer = Awaited<ReturnType<typeof createRenderer>>;
 
 export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HTMLCanvasElement, content: CardContent, fonts: Fonts) {
@@ -150,10 +181,12 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
     }
   }
 
+  let camera: Camera | undefined;
+
   function uniforms() {
     const [width, height] = canvasSurface.size;
     return {
-      viewProjection: perspective(fovY, width / height, -viewCenter(angle)),
+      viewProjection: camera ? cameraProjection(fovY, width / height, camera) : perspective(fovY, width / height, -viewCenter(angle)),
       eye: [0, 0, EYE_Z],
       foldAngle: ((180 - angle) / 180) * Math.PI,
       innerFrame: [INNER_SCREEN.x, INNER_SCREEN.y, INNER_SCREEN.width, INNER_SCREEN.height],
@@ -172,20 +205,23 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
     scene.resize([width, height]);
   });
 
-  /** `nameReveal` is how far the name on the front is revealed, 0 to 1. */
-  function render(next: number, nameReveal = 0) {
+  /** `nameReveal` is how far the name on the front is revealed, 0 to 1. PROTOTYPE: `view` is a fullscreen variant's camera. */
+  function render(next: number, nameReveal = 0, view?: Camera) {
     angle = next;
     reveal = nameReveal;
+    camera = view;
     syncReveal();
     body.set({ scene: uniforms() });
     const [shadowWidth, shadowHeight] = shadowSurface.size;
     // The shadow canvas frames the card's plane the same way the card's canvas does, only larger.
-    const extentY = (FRAME_UNITS.height + 2 * SHADOW_MARGIN) * ((EYE_Z - BODY.top) / EYE_Z);
+    // A fullscreen variant's shadow canvas is the size of its card canvas.
+    const extentY = camera ? camera.unitsTall : (FRAME_UNITS.height + 2 * SHADOW_MARGIN) * ((EYE_Z - BODY.top) / EYE_Z);
     const foldAngle = ((180 - angle) / 180) * Math.PI;
     shadow.set({
       shadow: {
         extent: [(extentY * shadowWidth) / shadowHeight, extentY],
-        center: viewCenter(angle),
+        center: camera ? camera.center : [viewCenter(angle), 0],
+        roll: camera?.roll ?? 0,
         foldAngle,
         spine: spineEdge(foldAngle),
       },

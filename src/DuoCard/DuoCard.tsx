@@ -7,6 +7,7 @@ import { BODY, INNER_SCREEN } from "./geometry";
 import { TEXELS_PER_UNIT, type HomeApp, type LinkRect } from "./content";
 import { fetchContributions } from "./github";
 import { EYE_Z, FRAME_UNITS, SHADOW_MARGIN, createRenderer, screenEdge, viewCenter, type Renderer } from "./renderer";
+import { VARIANT, modelToCss, prototypeState, scrollProgress, variantCamera, type Camera } from "./prototype/variants";
 import "@fontsource/instrument-serif";
 import "@fontsource-variable/inter";
 import "./DuoCard.css";
@@ -59,6 +60,10 @@ function angleForEdge(x: number) {
   return (low + high) / 2;
 }
 
+// PROTOTYPE: a ?variant= makes the card fill the screen (see prototype/variants).
+const fullscreen = VARIANT !== null;
+const clamp01 = (t: number) => Math.min(1, Math.max(0, t));
+
 type Motion =
   | { kind: "idle" }
   | { kind: "playing"; phase: number }
@@ -83,7 +88,10 @@ export function DuoCard(props: DuoCardProps) {
   const revealRef = useRef({ value: 0, hovering: false });
   const [links, setLinks] = useState<LinkRect[]>([]);
   const [scale, setScale] = useState(0);
-  const dragRef = useRef<{ id: number; x: number; edge: number; moved: boolean; link: boolean } | null>(null);
+  const dragRef = useRef<{ id: number; x: number; y: number; angle: number; edge: number; moved: boolean; link: boolean } | null>(null);
+  // PROTOTYPE: the scroll variant's pan, and the camera and view size the links were placed for.
+  const panRef = useRef(0);
+  const [view, setView] = useState<{ camera: Camera; width: number; height: number } | null>(null);
   const swallowClickRef = useRef(false);
 
   function setAngle(value: number) {
@@ -126,10 +134,10 @@ export function DuoCard(props: DuoCardProps) {
     const marginX = (SHADOW_MARGIN / FRAME_UNITS.width) * 100;
     const marginY = (SHADOW_MARGIN / FRAME_UNITS.height) * 100;
     Object.assign(shadowCanvas.style, {
-      left: `${-marginX}%`,
-      top: `${-marginY}%`,
-      width: `${100 + 2 * marginX}%`,
-      height: `${100 + 2 * marginY}%`,
+      left: fullscreen ? "0" : `${-marginX}%`,
+      top: fullscreen ? "0" : `${-marginY}%`,
+      width: fullscreen ? "100%" : `${100 + 2 * marginX}%`,
+      height: fullscreen ? "100%" : `${100 + 2 * marginY}%`,
     });
     viewport.prepend(shadowCanvas, canvas);
     let disposed = false;
@@ -190,6 +198,17 @@ export function DuoCard(props: DuoCardProps) {
             setAngle(motion.from + (motion.to - motion.from) * ease);
             if (t === 1) motionRef.current = { kind: "idle" };
           }
+          if (VARIANT === "scroll") {
+            // The first part of the scroll opens the card, the last part pans to the home screen.
+            const progress = scrollProgress();
+            const angle = 180 * clamp01(progress / 0.45);
+            const pan = clamp01((progress - 0.55) / 0.45);
+            if (angle !== angleRef.current) setAngle(angle);
+            if (pan !== panRef.current) {
+              panRef.current = pan;
+              dirtyRef.current = true;
+            }
+          }
           const reveal = revealRef.current;
           const target = reveal.hovering || angleRef.current > 0 ? 1 : 0;
           if (reveal.value !== target) {
@@ -199,7 +218,15 @@ export function DuoCard(props: DuoCardProps) {
           }
           if (dirtyRef.current) {
             dirtyRef.current = false;
-            renderer.render(angleRef.current, reveal.value);
+            const width = canvas.clientWidth;
+            const height = canvas.clientHeight;
+            const camera = VARIANT ? variantCamera(VARIANT, angleRef.current, panRef.current, width / height) : undefined;
+            renderer.render(angleRef.current, reveal.value, camera);
+            if (camera) {
+              prototypeState.angle = angleRef.current;
+              prototypeState.pan = panRef.current;
+              setView({ camera, width, height });
+            }
           }
           frameId = requestAnimationFrame(tick);
         };
@@ -209,6 +236,15 @@ export function DuoCard(props: DuoCardProps) {
         if (!disposed) setSupported(false);
       },
     );
+
+    // PROTOTYPE: a console hook to hold the fold at an angle, for screenshots.
+    if (fullscreen)
+      Object.assign(window, {
+        duoFold: (angle: number) => {
+          motionRef.current = { kind: "idle" };
+          setAngle(angle);
+        },
+      });
 
     const observer = new ResizeObserver(([entry]) => {
       // CSS pixels per model unit on the z = 0 plane. The field of view is set by height.
@@ -233,11 +269,14 @@ export function DuoCard(props: DuoCardProps) {
 
   // A press on a link can still fold the card: it only follows the link if it does not move.
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return;
+    // The scroll variant opens with the page's scroll only.
+    if (event.button !== 0 || VARIANT === "scroll") return;
     swallowClickRef.current = false;
     dragRef.current = {
       id: event.pointerId,
       x: event.clientX,
+      y: event.clientY,
+      angle: angleRef.current,
       edge: screenEdge(angleRef.current),
       moved: false,
       link: (event.target as Element).closest("a") !== null,
@@ -248,12 +287,21 @@ export function DuoCard(props: DuoCardProps) {
     const drag = dragRef.current;
     if (!drag || drag.id !== event.pointerId || !scale) return;
     const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
     if (!drag.moved) {
-      if (Math.abs(dx) < DRAG_SLOP) return;
+      if (Math.abs(VARIANT === "flip" ? dy : dx) < DRAG_SLOP) return;
       drag.moved = true;
       event.currentTarget.setPointerCapture(event.pointerId);
       motionRef.current = { kind: "idle" };
       setPlaying(false);
+    }
+    if (fullscreen) {
+      // The fold moves by the drag's share of the screen: a swipe left opens the turn card, a
+      // swipe up opens the flip card.
+      const rect = event.currentTarget.getBoundingClientRect();
+      const share = VARIANT === "flip" ? -dy / (rect.height * 0.6) : -dx / (rect.width * 0.8);
+      setAngle(180 * clamp01(drag.angle / 180 + share));
+      return;
     }
     // Model units on the card's plane per CSS pixel: `scale` is measured at depth EYE_Z.
     setAngle(angleForEdge(drag.edge + (dx / scale) * ((EYE_Z - BODY.top) / EYE_Z)));
@@ -313,13 +361,25 @@ export function DuoCard(props: DuoCardProps) {
     left: `calc(50% + ${(INNER_SCREEN.x + texX / TEXELS_PER_UNIT - pan) * depthScale * scale}px)`,
     top: `calc(50% - ${(INNER_SCREEN.y + INNER_SCREEN.height - texY / TEXELS_PER_UNIT) * depthScale * scale}px)`,
   });
+  // PROTOTYPE: in a fullscreen variant a link follows the variant's camera, which can turn it.
+  const linkStyle = (link: LinkRect): CSSProperties => {
+    if (!fullscreen)
+      return { ...toCss(link.x, link.y), width: link.width * cssPerTexel, height: link.height * cssPerTexel, borderRadius: link.radius * cssPerTexel };
+    if (!view) return { display: "none" };
+    const at = (texX: number, texY: number) =>
+      modelToCss(view.camera, INNER_SCREEN.x + texX / TEXELS_PER_UNIT, INNER_SCREEN.y + INNER_SCREEN.height - texY / TEXELS_PER_UNIT, view.width, view.height);
+    const a = at(link.x, link.y);
+    const b = at(link.x + link.width, link.y + link.height);
+    const perTexel = view.height / view.camera.unitsTall / TEXELS_PER_UNIT;
+    return { left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y), borderRadius: link.radius * perTexel };
+  };
 
   return (
-    <div ref={rootRef} className={props.className ? `duo ${props.className}` : "duo"}>
+    <div ref={rootRef} className={["duo", fullscreen && "duo--fullscreen", VARIANT === "scroll" && "duo--scroll", props.className].filter(Boolean).join(" ")}>
       <div
         ref={viewportRef}
         className="duo-viewport"
-        style={{ aspectRatio: `${FRAME_UNITS.width} / ${FRAME_UNITS.height}` }}
+        style={fullscreen ? undefined : { aspectRatio: `${FRAME_UNITS.width} / ${FRAME_UNITS.height}` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -331,7 +391,7 @@ export function DuoCard(props: DuoCardProps) {
           event.stopPropagation();
         }}
       >
-        {nameArea ? (
+        {nameArea && !fullscreen ? (
           // On the closed card, the name reveals while the mouse rests on it. Once the card opens it
           // stays revealed (see revealRef).
           <div
@@ -357,12 +417,7 @@ export function DuoCard(props: DuoCardProps) {
               aria-label={link.label}
               draggable={false}
               tabIndex={open ? 0 : -1}
-              style={{
-                ...toCss(link.x, link.y),
-                width: link.width * cssPerTexel,
-                height: link.height * cssPerTexel,
-                borderRadius: link.radius * cssPerTexel,
-              }}
+              style={linkStyle(link)}
             />
           ))}
         </div>
@@ -372,6 +427,8 @@ export function DuoCard(props: DuoCardProps) {
           {props.footnote ? <p>{props.footnote}</p> : null}
         </div>
       </div>
+
+      {VARIANT === "scroll" ? <div className="duo-scroll-space" aria-hidden="true" /> : null}
 
       {props.controls ? (
         <div className="duo-dock">

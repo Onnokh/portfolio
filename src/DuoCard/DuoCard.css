@@ -26,6 +26,23 @@
   cursor: grabbing;
 }
 
+/* PROTOTYPE: a ?variant= fills the screen with the card (see prototype/variants). */
+.duo--fullscreen .duo-viewport {
+  position: fixed;
+  inset: 0;
+  touch-action: none;
+}
+
+.duo--scroll .duo-viewport {
+  touch-action: pan-y;
+  cursor: auto;
+}
+
+/* The scroll variant's page: the card stays fixed while this scrolls under it. */
+.duo-scroll-space {
+  height: 400svh;
+}
+
 .duo-canvas {
   /* Positioned, so it stacks above the shadow. */
   position: relative;

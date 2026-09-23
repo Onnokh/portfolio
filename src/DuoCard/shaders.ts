@@ -305,9 +305,11 @@ fn toSrgb(c: vec3f) -> vec3f {
 // so its shadow leans away and softens toward that edge as the card opens and closes.
 export const shadowShader = /* wgsl */ `
 struct Shadow {
-  // Model units the canvas spans on the card's plane, and the view's pan (see viewCenter).
+  // Model units the canvas spans on the card's plane, and the point at its middle (see viewCenter).
   extent: vec2f,
-  center: f32,
+  center: vec2f,
+  // PROTOTYPE: how far the view is turned (see Camera).
+  roll: f32,
   foldAngle: f32,
   // The bent strip's leftmost point over the page (see spineEdge).
   spine: f32,
@@ -379,7 +381,10 @@ fn layerShadow(p: vec2f, layer: Layer) -> f32 {
 }
 
 @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-  let p = vec2f((uv.x - 0.5) * shadow.extent.x + shadow.center, (0.5 - uv.y) * shadow.extent.y);
+  let offset = vec2f((uv.x - 0.5) * shadow.extent.x, (0.5 - uv.y) * shadow.extent.y);
+  let c = cos(shadow.roll);
+  let s = sin(shadow.roll);
+  let p = shadow.center + vec2f(c * offset.x + s * offset.y, -s * offset.x + c * offset.y);
   let contact = layerShadow(p, Layer(0.55, 0.05, 0.12, 0.16, 0.12));
   let ambient = layerShadow(p, Layer(0.14, 0.4, 0.22, 0.3, 0.2));
   // Fade out toward the canvas edges, so a wide shadow never ends on a hard line.
