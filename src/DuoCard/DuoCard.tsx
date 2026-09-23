@@ -48,7 +48,9 @@ const HOLD = 1.2;
 const SWING = 3.1;
 const TRANSITION = 1.4;
 const DRAG_SLOP = 4;
-// Seconds for the name on the front to move fully into its readable place.
+// Seconds for the name on the front to move fully into its readable place. A card that opens from
+// closed waits for it, so the name does not move while the cover swings, as it moves back only once
+// the card has closed.
 const REVEAL = 0.9;
 
 function loopAngle(phase: number) {
@@ -88,6 +90,7 @@ function currentLayout(previous: Layout | null): Layout {
 type Motion =
   | { kind: "idle" }
   | { kind: "playing"; phase: number }
+  // `elapsed` starts below zero by the time the fold waits for the name.
   | { kind: "transition"; from: number; to: number; elapsed: number; duration: number };
 
 export function DuoCard(props: DuoCardProps) {
@@ -105,8 +108,8 @@ export function DuoCard(props: DuoCardProps) {
   const [resting, setResting] = useState(true);
   const [nameArea, setNameArea] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [edgeColors, setEdgeColors] = useState<{ closed: string; open: string } | null>(null);
-  // The name's reveal. It shows while the mouse rests on the name, and whenever the card is not
-  // fully closed, so a click that opens the card keeps the name readable.
+  // The name's reveal. It shows while the mouse rests on the name, while a click opens the card, and
+  // whenever the card is not fully closed.
   const revealRef = useRef({ value: 0, hovering: false });
   const [links, setLinks] = useState<LinkRect[]>([]);
   // The viewport's size in CSS pixels.
@@ -138,7 +141,8 @@ export function DuoCard(props: DuoCardProps) {
     }
     const from = angleRef.current;
     const duration = Math.max(0.3, (TRANSITION * Math.abs(to - from)) / 180);
-    motionRef.current = { kind: "transition", from, to, elapsed: 0, duration };
+    const wait = from === 0 && to > 0 ? (1 - revealRef.current.value) * REVEAL : 0;
+    motionRef.current = { kind: "transition", from, to, elapsed: -wait, duration };
     setPlaying(false);
   }
 
@@ -238,13 +242,14 @@ export function DuoCard(props: DuoCardProps) {
             setAngle(loopAngle(motion.phase));
           } else if (motion.kind === "transition") {
             motion.elapsed += dt;
-            const t = Math.min(motion.elapsed / motion.duration, 1);
+            const t = Math.min(Math.max(0, motion.elapsed) / motion.duration, 1);
             const ease = t * t * (3 - 2 * t);
             setAngle(motion.from + (motion.to - motion.from) * ease);
             if (t === 1) motionRef.current = { kind: "idle" };
           }
           const reveal = revealRef.current;
-          const target = reveal.hovering || angleRef.current > 0 ? 1 : 0;
+          const opening = motionRef.current.kind === "transition" && motionRef.current.to > motionRef.current.from;
+          const target = reveal.hovering || opening || angleRef.current > 0 ? 1 : 0;
           if (reveal.value !== target) {
             const step = matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : dt / REVEAL;
             reveal.value = target > reveal.value ? Math.min(target, reveal.value + step) : Math.max(target, reveal.value - step);
