@@ -1,0 +1,10 @@
+# Everything the image builds for itself, plus host-only noise.
+node_modules
+dist
+.git
+.claude
+**/.DS_Store
+
+Dockerfile
+.dockerignore
+docker-compose.yml

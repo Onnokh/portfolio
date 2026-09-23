@@ -1,0 +1,19 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Coolify reads this magic variable, issues the domain and certificate, and points its proxy
+      # at port 3000. Set the domain in the Coolify UI with the port: https://onkie.dev:3000.
+      - SERVICE_FQDN_WEB_3000
+    # Not `ports`: Coolify's proxy reaches the container over its own network.
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3000/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
