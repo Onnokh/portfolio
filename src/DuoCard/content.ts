@@ -431,6 +431,17 @@ function drawFront(
   ctx.restore();
 }
 
+// Where the front's copy starts on the inner image, in texels. It is not on a texel's edge.
+const FRONT_COPY_X = (FRONT_PAGE.x - INNER_SCREEN.x) * TEXELS_PER_UNIT;
+// The first whole texel column at or left of it. From there to the right edge the inner image is the
+// front's copy on black, so a reveal redraws only that part.
+const FRONT_COPY_COLUMN = Math.floor(FRONT_COPY_X);
+
+/** The front's copy on the inside right page. It also carries the status in its corner, so that shows only once the card opens. */
+function drawFrontCopy(ctx: CanvasRenderingContext2D, pageHeight: number, margin: number, content: CardContent, fonts: Fonts, reveal: number) {
+  drawFront(ctx, FRONT_COPY_X, (FRONT_PAGE.width * TEXELS_PER_UNIT) / CARD_PX, pageHeight, margin, content, fonts, reveal, true);
+}
+
 /** The inner image's size in texels: both pages, `height` tall. */
 const innerSize = (shape: Shape) => [Math.round(INNER_SCREEN.width * TEXELS_PER_UNIT), Math.round(shape.screenHeight * TEXELS_PER_UNIT)] as const;
 
@@ -465,12 +476,9 @@ function drawInner(
 
   // Right page: the fixed half. It repeats the front in the front's box, so what the front shows
   // lies exactly on what is under it.
-  const rightX = (FRONT_PAGE.x - INNER_SCREEN.x) * TEXELS_PER_UNIT;
-  const rightWidth = (FRONT_PAGE.width * TEXELS_PER_UNIT) / CARD_PX;
-  // The inside copy also carries the status in its corner, so it shows only once the card opens.
-  drawFront(ctx, rightX, rightWidth, pageHeight, frontMargin, content, fonts, reveal, true);
+  drawFrontCopy(ctx, pageHeight, frontMargin, content, fonts, reveal);
   // The name on the right page, above the small print, in texels: the area that reveals it on hover.
-  const nameArea = { x: rightX, y: 0, width: rightWidth * CARD_PX, height: (pageHeight - PAD - SMALL_PRINT) * CARD_PX };
+  const nameArea = { x: FRONT_COPY_X, y: 0, width: FRONT_PAGE.width * TEXELS_PER_UNIT, height: (pageHeight - PAD - SMALL_PRINT) * CARD_PX };
 
   return { canvas, links: [...widget.links, ...apps], nameArea };
 }
@@ -485,36 +493,87 @@ function drawOuter(content: CardContent, fonts: Fonts, height: number, frontMarg
   return canvas;
 }
 
+// Makes one mip level from the level above it, where the scissor lets it, the way a canvas scales an
+// image to half its size: a bilinear sample of the level above under each texel's centre, of the
+// values as stored, in sRGB. Where a side halves exactly, that is the mean of 2 × 2 texels.
+const downsampleShader = /* wgsl */ `
+@group(0) @binding(0) var above: texture_2d<f32>;
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  let corner = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+  return vec4f(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let aboveSize = vec2f(textureDimensions(above));
+  let size = max(floor(aboveSize / 2.0), vec2f(1.0));
+  let at = position.xy * aboveSize / size - 0.5;
+  let base = vec2i(floor(at));
+  let t = at - floor(at);
+  let last = vec2i(aboveSize) - 1;
+  let a = textureLoad(above, clamp(base, vec2i(0), last), 0);
+  let b = textureLoad(above, clamp(base + vec2i(1, 0), vec2i(0), last), 0);
+  let c = textureLoad(above, clamp(base + vec2i(0, 1), vec2i(0), last), 0);
+  let d = textureLoad(above, clamp(base + vec2i(1, 1), vec2i(0), last), 0);
+  return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+`;
+
+function downsampler(device: GPUDevice) {
+  const module = device.createShaderModule({ code: downsampleShader, label: "card:downsample" });
+  return device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module, entryPoint: "vs" },
+    fragment: { module, entryPoint: "fs", targets: [{ format: "rgba8unorm" }] },
+    label: "card:downsample",
+  });
+}
+
 /**
- * A texture with a full mip chain that a canvas can be written into, again and again: each level a
- * half-size redraw of the one above, on scratch canvases kept between writes.
+ * A texture with a full mip chain. A canvas is written into its top level, whole or only from column
+ * `from` on; the GPU then makes again only the texels of each level under what changed.
  */
-function mipTexture(gpu: Gpu, width: number, height: number, label: string) {
+function mipTexture(gpu: Gpu, pipeline: GPURenderPipeline, width: number, height: number, label: string) {
   const levels = Math.floor(Math.log2(Math.max(width, height))) + 1;
   const tex = texture(gpu, {
     kind: "2d",
     size: [width, height],
     format: "rgba8unorm-srgb",
+    // The levels are made through plain views, so the samples are of the values as stored.
+    viewFormats: ["rgba8unorm"],
     usage: ["texture_binding", "copy_dst", "render_attachment"],
     mipLevelCount: levels,
     label,
   });
-  const scratch: HTMLCanvasElement[] = [];
-  const write = (source: HTMLCanvasElement) => {
-    let level = source;
-    for (let i = 0; i < levels; i++) {
-      if (i > 0) {
-        const next = (scratch[i] ??= Object.assign(document.createElement("canvas"), {
-          width: Math.max(1, level.width >> 1),
-          height: Math.max(1, level.height >> 1),
-        }));
-        const ctx = next.getContext("2d")!;
-        ctx.imageSmoothingQuality = "high";
-        ctx.drawImage(level, 0, 0, next.width, next.height);
-        level = next;
-      }
-      gpu.gpu.queue.copyExternalImageToTexture({ source: level, flipY: false }, { texture: tex.gpu, mipLevel: i }, [level.width, level.height]);
+  const device = gpu.gpu;
+  const views = Array.from({ length: levels }, (_, level) => tex.gpu.createView({ format: "rgba8unorm", baseMipLevel: level, mipLevelCount: 1 }));
+  const reads = views.slice(0, -1).map((view) => device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: view }] }));
+  // The texels of a level `size` long that sample any of `lo` to `hi` on the level above, `above` long.
+  const under = (lo: number, hi: number, above: number, size: number) =>
+    [Math.max(0, Math.floor((lo - 0.5) * (size / above) - 0.5)), Math.min(size, Math.ceil((hi + 0.5) * (size / above)))] as const;
+
+  const write = (source: HTMLCanvasElement, from = 0) => {
+    device.queue.copyExternalImageToTexture(
+      { source, origin: [from, 0], flipY: false },
+      { texture: tex.gpu, origin: [from, 0] },
+      [width - from, height],
+    );
+    let [x0, x1] = [from, width];
+    let [y0, y1] = [0, height];
+    const encoder = device.createCommandEncoder({ label });
+    for (let level = 1; level < levels; level++) {
+      const w = Math.max(1, width >> level);
+      const h = Math.max(1, height >> level);
+      [x0, x1] = under(x0, x1, Math.max(1, width >> (level - 1)), w);
+      [y0, y1] = under(y0, y1, Math.max(1, height >> (level - 1)), h);
+      const pass = encoder.beginRenderPass({ colorAttachments: [{ view: views[level], loadOp: "load", storeOp: "store" }], label });
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, reads[level - 1]);
+      pass.setScissorRect(x0, y0, x1 - x0, y1 - y0);
+      pass.draw(3);
+      pass.end();
     }
+    device.queue.submit([encoder.finish()]);
   };
   return { tex, write };
 }
@@ -538,20 +597,30 @@ export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts
   const frontMargin = PAD - (shape.frontBand * TEXELS_PER_UNIT) / CARD_PX;
   const inner = drawInner(content, fonts, assets, size, frontMargin);
   const outer = drawOuter(content, fonts, height, frontMargin);
-  const innerMips = mipTexture(gpu, inner.canvas.width, inner.canvas.height, "card:inner");
-  const outerMips = mipTexture(gpu, outer.width, outer.height, "card:outer");
+  const downsample = downsampler(gpu.gpu);
+  const innerMips = mipTexture(gpu, downsample, inner.canvas.width, inner.canvas.height, "card:inner");
+  const outerMips = mipTexture(gpu, downsample, outer.width, outer.height, "card:outer");
   innerMips.write(inner.canvas);
   outerMips.write(outer);
   let innerReveal = 0;
   const redrawInner = () => innerMips.write(drawInner(content, fonts, assets, size, frontMargin, innerReveal, inner.canvas).canvas);
+  // A reveal changes the inner image only from FRONT_COPY_COLUMN on, where it is the front's copy on
+  // black. It draws that part again, in place on the same canvas, and writes only that part.
+  const redrawFrontCopy = () => {
+    const ctx = inner.canvas.getContext("2d")!;
+    ctx.fillStyle = INK;
+    ctx.fillRect(FRONT_COPY_COLUMN, 0, width - FRONT_COPY_COLUMN, height);
+    drawFrontCopy(ctx, height / CARD_PX, frontMargin, content, fonts, innerReveal);
+    innerMips.write(inner.canvas, FRONT_COPY_COLUMN);
+  };
   return {
     inner: innerMips.tex,
     outer: outerMips.tex,
-    // Redraws one face with the name revealed by `t`, 0 to 1, and uploads it again.
+    // Redraws one face with the name revealed by `t`, 0 to 1, and uploads what changed.
     reveal(face: "inner" | "outer", t: number) {
       if (face === "inner") {
         innerReveal = t;
-        redrawInner();
+        redrawFrontCopy();
       } else outerMips.write(drawOuter(content, fonts, height, frontMargin, t, outer));
     },
     // Takes the contribution graph's days once they arrive, and redraws the page they are on.
