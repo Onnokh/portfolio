@@ -1,4 +1,4 @@
-import { BODY, INNER_SCREEN, OUTER_SCREEN } from "./geometry";
+import { BODY, INNER_SCREEN, OUTER_SCREEN, type Shape } from "./geometry";
 
 const f = (n: number) => n.toFixed(6);
 
@@ -6,7 +6,7 @@ const f = (n: number) => n.toFixed(6);
 // Hermite bend of the flexible strip, and the screen shader with its fixed front-view projection,
 // progressive blur and darkening. The body lighting stands in for three.js' RoomEnvironment,
 // hemisphere, key and rim lights, with the same ACES filmic tone mapping.
-export const bodyShader = /* wgsl */ `
+export const bodyShader = (shape: Shape) => /* wgsl */ `
 struct Scene {
   viewProjection: mat4x4f,
   eye: vec3f,
@@ -230,10 +230,10 @@ fn aces(input: vec3f) -> vec3f {
   let uvOut = outerUV(in.world);
   let footprintIn = fwidth(uvIn);
   let footprintOut = fwidth(uvOut);
-  let inner = sdRoundRect(in.local, vec2f(${f(INNER_SCREEN.x + INNER_SCREEN.width / 2)}, ${f(INNER_SCREEN.y + INNER_SCREEN.height / 2)}),
-    vec2f(${f(INNER_SCREEN.width / 2)}, ${f(INNER_SCREEN.height / 2)}), ${f(INNER_SCREEN.radius)});
-  let outer = sdRoundRectLeft(in.local, vec2f(${f(OUTER_SCREEN.x + OUTER_SCREEN.width / 2)}, ${f(OUTER_SCREEN.y + OUTER_SCREEN.height / 2)}),
-    vec2f(${f(OUTER_SCREEN.width / 2)}, ${f(OUTER_SCREEN.height / 2)}), ${f(OUTER_SCREEN.radius)});
+  let inner = sdRoundRect(in.local, vec2f(${f(INNER_SCREEN.x + INNER_SCREEN.width / 2)}, 0.0),
+    vec2f(${f(INNER_SCREEN.width / 2)}, ${f(shape.screenHeight / 2)}), ${f(shape.screenRadius)});
+  let outer = sdRoundRectLeft(in.local, vec2f(${f(OUTER_SCREEN.x + OUTER_SCREEN.width / 2)}, 0.0),
+    vec2f(${f(OUTER_SCREEN.width / 2)}, ${f(shape.screenHeight / 2)}), ${f(shape.screenRadius)});
   let innerMask = 1.0 - smoothstep(-fwidth(inner), fwidth(inner), inner);
   let outerMask = 1.0 - smoothstep(-fwidth(outer), fwidth(outer), outer);
 
@@ -303,7 +303,7 @@ fn toSrgb(c: vec3f) -> vec3f {
 // the fainter. The fixed half lies
 // on the page. The cover's lift grows along its width, from nothing at the hinge to its free edge,
 // so its shadow leans away and softens toward that edge as the card opens and closes.
-export const shadowShader = /* wgsl */ `
+export const shadowShader = (shape: Shape) => /* wgsl */ `
 struct Shadow {
   // Model units the canvas spans on the card's plane, and the view's pan (see viewCenter).
   extent: vec2f,
@@ -316,8 +316,8 @@ struct Shadow {
 @group(0) @binding(0) var<uniform> shadow: Shadow;
 
 const HALF_WIDTH = ${f(BODY.halfWidth)};
-const HALF_HEIGHT = ${f(BODY.halfHeight)};
-const RADIUS = ${f(BODY.cornerRadius)};
+const HALF_HEIGHT = ${f(shape.halfHeight)};
+const RADIUS = ${f(shape.cornerRadius)};
 // The hinge side of each half is square, softened only by the frame's round edge.
 const SPINE_RADIUS = ${f((BODY.top - BODY.bottom) / 2)};
 // Where the cover still lies open, the two halves overlap by this much, so no seam shows between

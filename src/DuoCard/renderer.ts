@@ -1,5 +1,5 @@
 import { draw, effect, frame, geometry, init, sampler, surface, target } from "vgpu";
-import { BODY, FRONT_PAGE, INNER_SCREEN, buildBody } from "./geometry";
+import { BODY, FRONT_PAGE, INNER_SCREEN, buildBody, layoutShape, type Layout, type Shape } from "./geometry";
 import { createContent, type CardContent, type Fonts } from "./content";
 import type { ContributionDay } from "./github";
 import { bodyShader, presentShader, shadowShader } from "./shaders";
@@ -40,6 +40,43 @@ export function viewCenter(angle: number) {
 export function screenEdge(angle: number) {
   return projectedEdge(angle) - viewCenter(angle);
 }
+
+// In the fullscreen layout: how far the view pulls back halfway through the turn, so the card's
+// body shows while it turns, and how far inside the screens' edges it stops at rest, so no edge of a
+// screen draws on the view's edge.
+const PULL_BACK = 0.3;
+const INSET = 0.02;
+
+/** A view of the card's plane: `center` on x draws in the view's middle, `unitsTall` span its height. */
+export type Camera = { center: number; unitsTall: number };
+
+/**
+ * The fullscreen layout's view: one page at a time. Closed, it shows the front, with the spine along
+ * its left edge; open, the home screen. On the way it follows the cover and pulls back a little.
+ * Each rest view covers the view's shape (`viewAspect`, width / height), so a view a little off the
+ * card's shape crops the page instead of showing past it.
+ */
+export function fullscreenCamera(shape: Shape, angle: number, viewAspect: number): Camera {
+  const height = shape.screenHeight - 2 * INSET;
+  const cover = (lo: number, hi: number) => ({ center: (lo + hi) / 2, unitsTall: Math.min(height, (hi - lo) / viewAspect) });
+  const closed = cover(spineEdge(Math.PI) + INSET, -INNER_SCREEN.x - INSET);
+  const open = cover(INNER_SCREEN.x + INSET, 0);
+  const theta = (angle / 180) * Math.PI;
+  const t = (1 - Math.cos(theta)) / 2;
+  return {
+    center: closed.center + (open.center - closed.center) * t,
+    unitsTall: (closed.unitsTall + (open.unitsTall - closed.unitsTall) * t) * (1 + PULL_BACK * Math.sin(theta)),
+  };
+}
+
+/** Where the free edge draws in the fullscreen layout, in view widths from the view's middle. Monotonic in the angle. */
+export function fullscreenEdge(shape: Shape, angle: number, viewAspect: number) {
+  const view = fullscreenCamera(shape, angle, viewAspect);
+  return (projectedEdge(angle) - view.center) / (view.unitsTall * viewAspect);
+}
+
+/** The vertical field of view that shows `unitsTall` on the card's plane. */
+const fieldOfView = (unitsTall: number) => 2 * Math.atan(unitsTall / 2 / (EYE_Z - BODY.top));
 
 /**
  * The leftmost point of the bent strip over the page, in model units, for a fold angle in radians
@@ -94,16 +131,17 @@ function perspective(fovY: number, aspect: number, pan: number) {
 
 export type Renderer = Awaited<ReturnType<typeof createRenderer>>;
 
-export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HTMLCanvasElement, content: CardContent, fonts: Fonts) {
+export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HTMLCanvasElement, content: CardContent, fonts: Fonts, layout: Layout) {
   if (!("gpu" in navigator)) throw new Error("WebGPU is not available");
   const gpu = await init();
   gpu.onError((error) => console.error("[duo-card]", error));
   const canvasSurface = surface(gpu, canvas, { dpr: [1, 2] });
   const scene = target(gpu, { size: canvasSurface.size, format: "rgba16float", depth: true, msaa: true });
 
-  const mesh = buildBody();
+  const shape = layoutShape(layout);
+  const mesh = buildBody(shape);
   const body = draw(gpu, {
-    shader: bodyShader,
+    shader: bodyShader(shape),
     geometry: geometry(gpu, {
       buffers: [{ attributes: { position: "float32x3", normal: "float32x3", face: "float32" }, data: mesh.vertices }],
       indices: mesh.indices,
@@ -111,7 +149,7 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
     cull: "back",
   });
 
-  const maps = await createContent(gpu, content, fonts);
+  const maps = await createContent(gpu, content, fonts, shape);
   body.set({
     innerMap: maps.inner,
     outerMap: maps.outer,
@@ -129,7 +167,7 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
   });
   // Full resolution: where the card lies on the page, its shadow has a crisp edge.
   const shadowSurface = surface(gpu, shadowCanvas, { dpr: [1, 2] });
-  const shadow = effect(gpu, shadowShader);
+  const shadow = effect(gpu, shadowShader(shape));
 
   const fovY = 2 * Math.atan(FRAME_UNITS.height / 2 / EYE_Z);
   let angle = 180;
@@ -150,14 +188,21 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
     }
   }
 
+  // The fullscreen layout's view at the current angle; the page layout frames FRAME_UNITS.
+  function camera() {
+    const [width, height] = canvasSurface.size;
+    return layout.kind === "fullscreen" ? fullscreenCamera(shape, angle, width / height) : null;
+  }
+
   function uniforms() {
     const [width, height] = canvasSurface.size;
+    const view = camera();
     return {
-      viewProjection: perspective(fovY, width / height, -viewCenter(angle)),
+      viewProjection: view ? perspective(fieldOfView(view.unitsTall), width / height, -view.center) : perspective(fovY, width / height, -viewCenter(angle)),
       eye: [0, 0, EYE_Z],
       foldAngle: ((180 - angle) / 180) * Math.PI,
-      innerFrame: [INNER_SCREEN.x, INNER_SCREEN.y, INNER_SCREEN.width, INNER_SCREEN.height],
-      outerFrame: [FRONT_PAGE.x, INNER_SCREEN.y, FRONT_PAGE.width, INNER_SCREEN.height],
+      innerFrame: [INNER_SCREEN.x, -shape.screenHeight / 2, INNER_SCREEN.width, shape.screenHeight],
+      outerFrame: [FRONT_PAGE.x, -shape.screenHeight / 2, FRONT_PAGE.width, shape.screenHeight],
       innerPixel: [1 / maps.innerSize[0], 1 / maps.innerSize[1]],
       outerPixel: [1 / maps.outerSize[0], 1 / maps.outerSize[1]],
       innerBlur: BLUR_UNITS * (maps.innerSize[0] / INNER_SCREEN.width),
@@ -179,13 +224,15 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
     syncReveal();
     body.set({ scene: uniforms() });
     const [shadowWidth, shadowHeight] = shadowSurface.size;
-    // The shadow canvas frames the card's plane the same way the card's canvas does, only larger.
-    const extentY = (FRAME_UNITS.height + 2 * SHADOW_MARGIN) * ((EYE_Z - BODY.top) / EYE_Z);
+    // The shadow canvas frames the card's plane the same way the card's canvas does: on the page
+    // larger, in the fullscreen layout the same.
+    const view = camera();
+    const extentY = view ? view.unitsTall : (FRAME_UNITS.height + 2 * SHADOW_MARGIN) * ((EYE_Z - BODY.top) / EYE_Z);
     const foldAngle = ((180 - angle) / 180) * Math.PI;
     shadow.set({
       shadow: {
         extent: [(extentY * shadowWidth) / shadowHeight, extentY],
-        center: viewCenter(angle),
+        center: view ? view.center : viewCenter(angle),
         foldAngle,
         spine: spineEdge(foldAngle),
       },

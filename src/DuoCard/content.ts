@@ -1,6 +1,6 @@
 import type { Gpu } from "vgpu";
 import { texture } from "vgpu";
-import { FRONT_PAGE, INNER_SCREEN } from "./geometry";
+import { FRONT_PAGE, INNER_SCREEN, type Shape } from "./geometry";
 import type { ContributionDay } from "./github";
 
 export type HomeApp = {
@@ -421,11 +421,10 @@ function drawFront(ctx: CanvasRenderingContext2D, left: number, width: number, h
   ctx.restore();
 }
 
-/** The left page's size in texels, which the wallpaper is blurred to. */
-const innerSize = () => [Math.round(INNER_SCREEN.width * TEXELS_PER_UNIT), Math.round(INNER_SCREEN.height * TEXELS_PER_UNIT)] as const;
+/** The inner image's size in texels: both pages, `height` tall. */
+const innerSize = (shape: Shape) => [Math.round(INNER_SCREEN.width * TEXELS_PER_UNIT), Math.round(shape.screenHeight * TEXELS_PER_UNIT)] as const;
 
-function drawInner(content: CardContent, fonts: Fonts, assets: HomeAssets, reveal = 0, into?: HTMLCanvasElement) {
-  const [width, height] = innerSize();
+function drawInner(content: CardContent, fonts: Fonts, assets: HomeAssets, [width, height]: readonly [number, number], reveal = 0, into?: HTMLCanvasElement) {
   const canvas = into ?? Object.assign(document.createElement("canvas"), { width, height });
   const ctx = canvas.getContext("2d")!;
   // The left half is the home screen's wallpaper; the right half is black up to the fold, so the
@@ -458,9 +457,8 @@ function drawInner(content: CardContent, fonts: Fonts, assets: HomeAssets, revea
   return { canvas, links: [...widget.links, ...apps], nameArea };
 }
 
-function drawOuter(content: CardContent, fonts: Fonts, reveal = 0, into?: HTMLCanvasElement) {
+function drawOuter(content: CardContent, fonts: Fonts, height: number, reveal = 0, into?: HTMLCanvasElement) {
   const width = Math.round(FRONT_PAGE.width * TEXELS_PER_UNIT);
-  const height = Math.round(INNER_SCREEN.height * TEXELS_PER_UNIT);
   const canvas = into ?? Object.assign(document.createElement("canvas"), { width, height });
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = PAPER;
@@ -503,7 +501,7 @@ function mipTexture(gpu: Gpu, width: number, height: number, label: string) {
   return { tex, write };
 }
 
-export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts) {
+export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts, shape: Shape) {
   await document.fonts?.ready;
   // Canvas text does not make the browser fetch a web font, so load the faces it uses first.
   await Promise.all([
@@ -515,16 +513,17 @@ export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts
     Promise.all(content.apps.map((app) => loadImage(app.icon))),
     content.wallpaper ? loadImage(content.wallpaper) : null,
   ]);
-  const [width, height] = innerSize();
+  const size = innerSize(shape);
+  const [width, height] = size;
   const assets: HomeAssets = { icons, wallpaper: wallpaper && blurredCover(wallpaper, width / 2, height, WALLPAPER_BLUR) };
-  const inner = drawInner(content, fonts, assets);
-  const outer = drawOuter(content, fonts);
+  const inner = drawInner(content, fonts, assets, size);
+  const outer = drawOuter(content, fonts, height);
   const innerMips = mipTexture(gpu, inner.canvas.width, inner.canvas.height, "card:inner");
   const outerMips = mipTexture(gpu, outer.width, outer.height, "card:outer");
   innerMips.write(inner.canvas);
   outerMips.write(outer);
   let innerReveal = 0;
-  const redrawInner = () => innerMips.write(drawInner(content, fonts, assets, innerReveal, inner.canvas).canvas);
+  const redrawInner = () => innerMips.write(drawInner(content, fonts, assets, size, innerReveal, inner.canvas).canvas);
   return {
     inner: innerMips.tex,
     outer: outerMips.tex,
@@ -533,7 +532,7 @@ export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts
       if (face === "inner") {
         innerReveal = t;
         redrawInner();
-      } else outerMips.write(drawOuter(content, fonts, t, outer));
+      } else outerMips.write(drawOuter(content, fonts, height, t, outer));
     },
     // Takes the contribution graph's days once they arrive, and redraws the page they are on.
     contributions(days: ContributionDay[]) {

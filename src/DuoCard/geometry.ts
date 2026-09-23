@@ -1,11 +1,10 @@
 // Card body in model units. The proportions follow the iPhone Duo reference: an open inner screen
 // of 15.8 × 11.1 units, a hinge axis just above the inner screen, and a cover half that folds
-// toward the camera onto the fixed half.
+// toward the camera onto the fixed half. The height and the corners depend on the layout (see
+// Shape); everything here is the same in every layout.
 
 export const BODY = {
   halfWidth: 8.3,
-  halfHeight: 5.95,
-  cornerRadius: 1.05,
   top: 0.24948,
   bottom: -0.16,
   // Hinge axis height. Folding around a line slightly above the inner screen leaves a thin gap
@@ -15,18 +14,49 @@ export const BODY = {
   hingeHalfWidth: 0.35,
 } as const;
 
-// The inner screen spans both halves; the outer screen covers the back of the cover half.
-export const INNER_SCREEN = { x: -7.9, y: -5.55, width: 15.8, height: 11.1, radius: 0.62 } as const;
+// The inner screen spans both halves; the outer screen covers the back of the cover half. Across,
+// both are the same in every layout.
+export const INNER_SCREEN = { x: -7.9, width: 15.8 } as const;
 // The outside of the bent strip is the hinge, metal at every angle. Like the reference's outer
 // panel, the outer screen is part of the rigid cover and stops short of the hinge, with a black band
 // between the two: the same border as on the other sides. Its corners at the fold are square.
 const FOLD_BORDER = BODY.hingeHalfWidth + 0.2;
-export const OUTER_SCREEN = { x: -7.9, y: -5.55, width: 7.9 - FOLD_BORDER, height: 11.1, radius: 0.62 } as const;
+export const OUTER_SCREEN = { x: -7.9, width: 7.9 - FOLD_BORDER } as const;
 
 // The front of the card as it lies on screen when closed: the outer screen, folded onto the fixed
 // half. The inside right page lays out in this same box, so everything on the front sits exactly
 // on top of its copy inside.
 export const FRONT_PAGE = { x: -(OUTER_SCREEN.x + OUTER_SCREEN.width), width: OUTER_SCREEN.width } as const;
+
+// The black border between the screens and the body's edge.
+const BEZEL = 0.4;
+
+/**
+ * What differs between the layouts: how tall the card is, and its corners. Both screens are
+ * `screenHeight` tall and centred on y = 0, with corners of `screenRadius`.
+ */
+export type Shape = { halfHeight: number; cornerRadius: number; screenHeight: number; screenRadius: number };
+
+// The card on a page, in the reference's proportions.
+export const CARD_SHAPE: Shape = { halfHeight: 5.95, cornerRadius: 1.05, screenHeight: 11.1, screenRadius: 0.62 };
+
+/**
+ * The card that fills a phone's screen, one page at a time: each page has the screen's shape,
+ * `aspect` = width / height. The screens' corners are square, since the phone rounds its own, and
+ * the body's corners round about the screens' at the bezel's width.
+ */
+export function fullscreenShape(aspect: number): Shape {
+  const screenHeight = INNER_SCREEN.width / 2 / aspect;
+  return { halfHeight: screenHeight / 2 + BEZEL, cornerRadius: BEZEL, screenHeight, screenRadius: 0 };
+}
+
+/**
+ * How the card is shown: on the page, whole and centred, or filling the screen of a phone held
+ * upright, whose view has the shape `aspect` = width / height.
+ */
+export type Layout = { kind: "page" } | { kind: "fullscreen"; aspect: number };
+
+export const layoutShape = (layout: Layout) => (layout.kind === "page" ? CARD_SHAPE : fullscreenShape(layout.aspect));
 
 export const enum Face {
   Inner = 0,
@@ -42,8 +72,8 @@ const STRIDE = 7;
  * joins them. Every part is split into columns across x, dense inside the hinge strip, so the
  * vertex shader can bend it there.
  */
-export function buildBody() {
-  const { halfWidth, halfHeight, cornerRadius, top, bottom, hingeHalfWidth } = BODY;
+export function buildBody({ halfHeight, cornerRadius }: Shape) {
+  const { halfWidth, top, bottom, hingeHalfWidth } = BODY;
   const thickness = top - bottom;
   const edge = thickness / 2;
   const middle = (top + bottom) / 2;

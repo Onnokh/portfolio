@@ -1,12 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { BusinessCard } from "../BusinessCard/BusinessCard";
 import { PixelMark } from "../BusinessCard/PixelMark";
-import { BODY, INNER_SCREEN } from "./geometry";
+import { BODY, INNER_SCREEN, layoutShape, type Layout } from "./geometry";
 import { TEXELS_PER_UNIT, type HomeApp, type LinkRect } from "./content";
 import { fetchContributions } from "./github";
-import { EYE_Z, FRAME_UNITS, SHADOW_MARGIN, createRenderer, screenEdge, viewCenter, type Renderer } from "./renderer";
+import {
+  EYE_Z,
+  FRAME_UNITS,
+  SHADOW_MARGIN,
+  createRenderer,
+  fullscreenCamera,
+  fullscreenEdge,
+  screenEdge,
+  viewCenter,
+  type Renderer,
+} from "./renderer";
 import "@fontsource/instrument-serif";
 import "@fontsource-variable/inter";
 import "./DuoCard.css";
@@ -48,15 +58,30 @@ function loopAngle(phase: number) {
 }
 
 // The angle whose free edge draws at `x` on screen. The edge is monotonic in the angle, so bisect.
-function angleForEdge(x: number) {
+function angleForEdge(x: number, edgeAt: (angle: number) => number) {
   let low = 0;
   let high = 180;
   for (let i = 0; i < 24; i++) {
     const mid = (low + high) / 2;
-    if (screenEdge(mid) > x) low = mid;
+    if (edgeAt(mid) > x) low = mid;
     else high = mid;
   }
   return (low + high) / 2;
+}
+
+// A phone held upright: there the card fills the screen.
+const FULLSCREEN = "(max-width: 767px) and (max-aspect-ratio: 3/4)";
+
+/**
+ * The layout for the viewport now. A small change of shape, such as a browser bar that shows, keeps
+ * the card as it is: its view covers the screen and crops the page a little. A larger change builds
+ * the card again in the new shape.
+ */
+function currentLayout(previous: Layout | null): Layout {
+  if (!matchMedia(FULLSCREEN).matches) return previous?.kind === "page" ? previous : { kind: "page" };
+  const aspect = innerWidth / innerHeight;
+  if (previous?.kind === "fullscreen" && Math.abs(aspect / previous.aspect - 1) < 0.04) return previous;
+  return { kind: "fullscreen", aspect };
 }
 
 type Motion =
@@ -82,7 +107,12 @@ export function DuoCard(props: DuoCardProps) {
   // fully closed, so a click that opens the card keeps the name readable.
   const revealRef = useRef({ value: 0, hovering: false });
   const [links, setLinks] = useState<LinkRect[]>([]);
-  const [scale, setScale] = useState(0);
+  // The viewport's size in CSS pixels.
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  // Measured on the client before the first paint, so the card is built once, in the right shape.
+  const [layout, setLayout] = useState<Layout | null>(null);
+  const shape = useMemo(() => layout && layoutShape(layout), [layout]);
+  const fullscreen = layout?.kind === "fullscreen";
   const dragRef = useRef<{ id: number; x: number; edge: number; moved: boolean; link: boolean } | null>(null);
   const swallowClickRef = useRef(false);
 
@@ -110,21 +140,36 @@ export function DuoCard(props: DuoCardProps) {
     setPlaying(false);
   }
 
+  useLayoutEffect(() => {
+    setLayout((previous) => currentLayout(previous));
+    let timer = 0;
+    const onResize = () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(() => setLayout((previous) => currentLayout(previous)), 150);
+    };
+    addEventListener("resize", onResize);
+    return () => {
+      clearTimeout(timer);
+      removeEventListener("resize", onResize);
+    };
+  }, []);
+
   useEffect(() => {
     const viewport = viewportRef.current;
     const root = rootRef.current;
-    if (!viewport || !root) return;
+    if (!viewport || !root || !layout) return;
     // A canvas per mount: a WebGPU context belongs to one device, and a remount must not
     // unconfigure the canvas the next renderer draws into.
     const canvas = document.createElement("canvas");
     canvas.className = "duo-canvas";
     canvas.setAttribute("aria-hidden", "true");
-    // The shadow's canvas, behind the card's and larger by SHADOW_MARGIN model units on every side.
+    // The shadow's canvas, behind the card's. On the page it is larger by SHADOW_MARGIN model units
+    // on every side; filling the screen, it is the same size.
     const shadowCanvas = document.createElement("canvas");
     shadowCanvas.className = "duo-shadow";
     shadowCanvas.setAttribute("aria-hidden", "true");
-    const marginX = (SHADOW_MARGIN / FRAME_UNITS.width) * 100;
-    const marginY = (SHADOW_MARGIN / FRAME_UNITS.height) * 100;
+    const marginX = fullscreen ? 0 : (SHADOW_MARGIN / FRAME_UNITS.width) * 100;
+    const marginY = fullscreen ? 0 : (SHADOW_MARGIN / FRAME_UNITS.height) * 100;
     Object.assign(shadowCanvas.style, {
       left: `${-marginX}%`,
       top: `${-marginY}%`,
@@ -155,6 +200,7 @@ export function DuoCard(props: DuoCardProps) {
         wallpaper: props.wallpaper,
       },
       fonts,
+      layout,
     ).then(
       (renderer) => {
         if (disposed) {
@@ -211,8 +257,7 @@ export function DuoCard(props: DuoCardProps) {
     );
 
     const observer = new ResizeObserver(([entry]) => {
-      // CSS pixels per model unit on the z = 0 plane. The field of view is set by height.
-      setScale(entry.contentRect.height / FRAME_UNITS.height);
+      setSize({ width: entry.contentRect.width, height: entry.contentRect.height });
       dirtyRef.current = true;
     });
     observer.observe(canvas);
@@ -227,9 +272,16 @@ export function DuoCard(props: DuoCardProps) {
       canvas.remove();
       shadowCanvas.remove();
     };
-    // The card content is drawn once per mount.
+    // The card content is drawn once per mount, and again for a new layout.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [layout]);
+
+  // Where the cover's free edge draws: on the page in model units after the pan, filling the screen
+  // in view widths.
+  function edgeAt(angle: number) {
+    if (fullscreen && shape && size) return fullscreenEdge(shape, angle, size.width / size.height);
+    return screenEdge(angle);
+  }
 
   // A press on a link can still fold the card: it only follows the link if it does not move.
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -238,7 +290,7 @@ export function DuoCard(props: DuoCardProps) {
     dragRef.current = {
       id: event.pointerId,
       x: event.clientX,
-      edge: screenEdge(angleRef.current),
+      edge: edgeAt(angleRef.current),
       moved: false,
       link: (event.target as Element).closest("a") !== null,
     };
@@ -246,7 +298,7 @@ export function DuoCard(props: DuoCardProps) {
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
-    if (!drag || drag.id !== event.pointerId || !scale) return;
+    if (!drag || drag.id !== event.pointerId || !size) return;
     const dx = event.clientX - drag.x;
     if (!drag.moved) {
       if (Math.abs(dx) < DRAG_SLOP) return;
@@ -255,8 +307,13 @@ export function DuoCard(props: DuoCardProps) {
       motionRef.current = { kind: "idle" };
       setPlaying(false);
     }
-    // Model units on the card's plane per CSS pixel: `scale` is measured at depth EYE_Z.
-    setAngle(angleForEdge(drag.edge + (dx / scale) * ((EYE_Z - BODY.top) / EYE_Z)));
+    if (fullscreen) {
+      setAngle(angleForEdge(drag.edge + dx / size.width, edgeAt));
+      return;
+    }
+    // Model units on the card's plane per CSS pixel. FRAME_UNITS is measured at depth EYE_Z.
+    const scale = size.height / FRAME_UNITS.height;
+    setAngle(angleForEdge(drag.edge + (dx / scale) * ((EYE_Z - BODY.top) / EYE_Z), edgeAt));
   }
 
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
@@ -304,22 +361,33 @@ export function DuoCard(props: DuoCardProps) {
   }
 
   // The links and the project list are on the cover. They only take input while the cover lies
-  // open, flat in the fixed half's plane, so their screen position is exact.
-  const depthScale = EYE_Z / (EYE_Z - BODY.top);
-  const cssPerTexel = (depthScale * scale) / TEXELS_PER_UNIT;
-  // The view pans to keep the card centred; overlays only take input at rest, closed or open.
-  const pan = viewCenter(open ? 180 : 0);
-  const toCss = (texX: number, texY: number) => ({
-    left: `calc(50% + ${(INNER_SCREEN.x + texX / TEXELS_PER_UNIT - pan) * depthScale * scale}px)`,
-    top: `calc(50% - ${(INNER_SCREEN.y + INNER_SCREEN.height - texY / TEXELS_PER_UNIT) * depthScale * scale}px)`,
-  });
+  // open, flat in the fixed half's plane, so their screen position is exact. The view moves as the
+  // card opens; overlays only take input at rest, closed or open, so they follow the rest view: its
+  // middle on x, and CSS pixels per model unit on the card's plane.
+  const rest = (() => {
+    if (!size || !shape) return null;
+    if (!fullscreen) return { center: viewCenter(open ? 180 : 0), perUnit: (EYE_Z / (EYE_Z - BODY.top)) * (size.height / FRAME_UNITS.height) };
+    const view = fullscreenCamera(shape, open ? 180 : 0, size.width / size.height);
+    return { center: view.center, perUnit: size.height / view.unitsTall };
+  })();
+  // A box on the inner image, in texels, placed over where it draws.
+  const place = (box: { x: number; y: number; width: number; height: number }): CSSProperties => {
+    if (!rest || !size || !shape) return { display: "none" };
+    const perTexel = rest.perUnit / TEXELS_PER_UNIT;
+    return {
+      left: size.width / 2 + (INNER_SCREEN.x + box.x / TEXELS_PER_UNIT - rest.center) * rest.perUnit,
+      top: size.height / 2 - (shape.screenHeight / 2 - box.y / TEXELS_PER_UNIT) * rest.perUnit,
+      width: box.width * perTexel,
+      height: box.height * perTexel,
+    };
+  };
 
   return (
-    <div ref={rootRef} className={props.className ? `duo ${props.className}` : "duo"}>
+    <div ref={rootRef} className={["duo", fullscreen && "duo--fullscreen", props.className].filter(Boolean).join(" ")}>
       <div
         ref={viewportRef}
         className="duo-viewport"
-        style={{ aspectRatio: `${FRAME_UNITS.width} / ${FRAME_UNITS.height}` }}
+        style={fullscreen ? undefined : { aspectRatio: `${FRAME_UNITS.width} / ${FRAME_UNITS.height}` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -338,7 +406,7 @@ export function DuoCard(props: DuoCardProps) {
             className="duo-name"
             data-resting={resting ? "" : undefined}
             aria-hidden="true"
-            style={{ ...toCss(nameArea.x, nameArea.y), width: nameArea.width * cssPerTexel, height: nameArea.height * cssPerTexel }}
+            style={place(nameArea)}
             onPointerEnter={(event) => {
               if (event.pointerType === "mouse") revealRef.current.hovering = true;
             }}
@@ -357,12 +425,7 @@ export function DuoCard(props: DuoCardProps) {
               aria-label={link.label}
               draggable={false}
               tabIndex={open ? 0 : -1}
-              style={{
-                ...toCss(link.x, link.y),
-                width: link.width * cssPerTexel,
-                height: link.height * cssPerTexel,
-                borderRadius: link.radius * cssPerTexel,
-              }}
+              style={{ ...place(link), borderRadius: rest ? (link.radius * rest.perUnit) / TEXELS_PER_UNIT : 0 }}
             />
           ))}
         </div>
