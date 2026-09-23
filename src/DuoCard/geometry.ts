@@ -32,6 +32,38 @@ export const FRONT_PAGE = { x: -(OUTER_SCREEN.x + OUTER_SCREEN.width), width: OU
 const BEZEL = 0.4;
 
 /**
+ * The leftmost point of the bent strip over the page, in model units, for a fold angle in radians
+ * (0 open, π closed). Open, the strip lies flat and reaches past the hinge; closed, it curls round
+ * and the spine sits right of it. This is the Hermite curve of the vertex shader, for both faces.
+ */
+export function spineEdge(foldAngle: number) {
+  const c = Math.cos(foldAngle);
+  const s = Math.sin(foldAngle);
+  const h = BODY.hingeHalfWidth;
+  let edge = Infinity;
+  for (const z of [BODY.top, BODY.bottom]) {
+    const start = -h * c + s * (z - BODY.hingeZ);
+    for (let i = 0; i <= 32; i++) {
+      const t = i / 32;
+      const x =
+        (2 * t ** 3 - 3 * t ** 2 + 1) * start +
+        (t ** 3 - 2 * t ** 2 + t) * 2 * h * c +
+        (-2 * t ** 3 + 3 * t ** 2) * h +
+        (t ** 3 - t ** 2) * 2 * h;
+      edge = Math.min(edge, x);
+    }
+  }
+  return edge;
+}
+
+// In the fullscreen layout the view stops this far inside the screens' edges at rest, so no edge of
+// a screen draws on the view's edge.
+export const FULLSCREEN_INSET = 0.02;
+
+// The fullscreen layout's closed view, across: from the spine to the front's far edge.
+export const CLOSED_VIEW = { lo: spineEdge(Math.PI) + FULLSCREEN_INSET, hi: -INNER_SCREEN.x - FULLSCREEN_INSET } as const;
+
+/**
  * What differs between the layouts: how tall the card is, and its corners. Both screens are
  * `screenHeight` tall and centred on y = 0, with corners of `screenRadius`.
  */
@@ -41,12 +73,14 @@ export type Shape = { halfHeight: number; cornerRadius: number; screenHeight: nu
 export const CARD_SHAPE: Shape = { halfHeight: 5.95, cornerRadius: 1.05, screenHeight: 11.1, screenRadius: 0.62 };
 
 /**
- * The card that fills a phone's screen, one page at a time: each page has the screen's shape,
- * `aspect` = width / height. The screens' corners are square, since the phone rounds its own, and
- * the body's corners round about the screens' at the bezel's width.
+ * The card that fills a phone's screen, one page at a time. The closed view and the screens' full
+ * height have the screen's shape, `aspect` = width / height, so the front shows whole, with the
+ * margins it is laid out with; open, the home screen is a little wider than the view and loses a
+ * sliver on each side. The screens' corners are square, since the phone rounds its own, and the
+ * body's corners round about the screens' at the bezel's width.
  */
 export function fullscreenShape(aspect: number): Shape {
-  const screenHeight = INNER_SCREEN.width / 2 / aspect;
+  const screenHeight = (CLOSED_VIEW.hi - CLOSED_VIEW.lo) / aspect + 2 * FULLSCREEN_INSET;
   return { halfHeight: screenHeight / 2 + BEZEL, cornerRadius: BEZEL, screenHeight, screenRadius: 0 };
 }
 

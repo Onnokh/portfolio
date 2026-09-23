@@ -1,5 +1,16 @@
 import { draw, effect, frame, geometry, init, sampler, surface, target } from "vgpu";
-import { BODY, FRONT_PAGE, INNER_SCREEN, buildBody, layoutShape, type Layout, type Shape } from "./geometry";
+import {
+  BODY,
+  CLOSED_VIEW,
+  FRONT_PAGE,
+  FULLSCREEN_INSET,
+  INNER_SCREEN,
+  buildBody,
+  layoutShape,
+  spineEdge,
+  type Layout,
+  type Shape,
+} from "./geometry";
 import { createContent, type CardContent, type Fonts } from "./content";
 import type { ContributionDay } from "./github";
 import { bodyShader, presentShader, shadowShader } from "./shaders";
@@ -42,10 +53,8 @@ export function screenEdge(angle: number) {
 }
 
 // In the fullscreen layout: how far the view pulls back halfway through the turn, so the card's
-// body shows while it turns, and how far inside the screens' edges it stops at rest, so no edge of a
-// screen draws on the view's edge.
+// body shows while it turns.
 const PULL_BACK = 0.3;
-const INSET = 0.02;
 
 /** A view of the card's plane: `center` on x draws in the view's middle, `unitsTall` span its height. */
 export type Camera = { center: number; unitsTall: number };
@@ -57,10 +66,10 @@ export type Camera = { center: number; unitsTall: number };
  * card's shape crops the page instead of showing past it.
  */
 export function fullscreenCamera(shape: Shape, angle: number, viewAspect: number): Camera {
-  const height = shape.screenHeight - 2 * INSET;
+  const height = shape.screenHeight - 2 * FULLSCREEN_INSET;
   const cover = (lo: number, hi: number) => ({ center: (lo + hi) / 2, unitsTall: Math.min(height, (hi - lo) / viewAspect) });
-  const closed = cover(spineEdge(Math.PI) + INSET, -INNER_SCREEN.x - INSET);
-  const open = cover(INNER_SCREEN.x + INSET, 0);
+  const closed = cover(CLOSED_VIEW.lo, CLOSED_VIEW.hi);
+  const open = cover(INNER_SCREEN.x + FULLSCREEN_INSET, 0);
   const theta = (angle / 180) * Math.PI;
   const t = (1 - Math.cos(theta)) / 2;
   return {
@@ -77,31 +86,6 @@ export function fullscreenEdge(shape: Shape, angle: number, viewAspect: number) 
 
 /** The vertical field of view that shows `unitsTall` on the card's plane. */
 const fieldOfView = (unitsTall: number) => 2 * Math.atan(unitsTall / 2 / (EYE_Z - BODY.top));
-
-/**
- * The leftmost point of the bent strip over the page, in model units, for a fold angle in radians
- * (0 open, π closed). Open, the strip lies flat and reaches past the hinge; closed, it curls round
- * and the spine sits right of it. This is the Hermite curve of the vertex shader, for both faces.
- */
-function spineEdge(foldAngle: number) {
-  const c = Math.cos(foldAngle);
-  const s = Math.sin(foldAngle);
-  const h = BODY.hingeHalfWidth;
-  let edge = Infinity;
-  for (const z of [BODY.top, BODY.bottom]) {
-    const start = -h * c + s * (z - BODY.hingeZ);
-    for (let i = 0; i <= 32; i++) {
-      const t = i / 32;
-      const x =
-        (2 * t ** 3 - 3 * t ** 2 + 1) * start +
-        (t ** 3 - 2 * t ** 2 + t) * 2 * h * c +
-        (-2 * t ** 3 + 3 * t ** 2) * h +
-        (t ** 3 - t ** 2) * 2 * h;
-      edge = Math.min(edge, x);
-    }
-  }
-  return edge;
-}
 
 const NEAR = 0.1;
 const FAR = 250;
