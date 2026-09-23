@@ -442,6 +442,14 @@ function drawFrontCopy(ctx: CanvasRenderingContext2D, pageHeight: number, margin
   drawFront(ctx, FRONT_COPY_X, (FRONT_PAGE.width * TEXELS_PER_UNIT) / CARD_PX, pageHeight, margin, content, fonts, reveal, true);
 }
 
+/** The mean colour of the top row of `canvas`, as a CSS hex colour. */
+function topColor(canvas: HTMLCanvasElement) {
+  const row = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, 1).data;
+  const sum = [0, 0, 0];
+  for (let i = 0; i < row.length; i += 4) for (let c = 0; c < 3; c++) sum[c] += row[i + c];
+  return `#${sum.map((v) => Math.round(v / canvas.width).toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** The inner image's size in texels: both pages, `height` tall. */
 const innerSize = (shape: Shape) => [Math.round(INNER_SCREEN.width * TEXELS_PER_UNIT), Math.round(shape.screenHeight * TEXELS_PER_UNIT)] as const;
 
@@ -629,6 +637,9 @@ export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts
       redrawInner();
     },
     nameArea: inner.nameArea,
+    // The colour along the top of each page that fills the screen at rest: the front, closed, and
+    // the home screen, open.
+    edgeColors: { closed: INK, open: assets.wallpaper ? topColor(assets.wallpaper) : PAPER },
     innerSize: [inner.canvas.width, inner.canvas.height] as const,
     outerSize: [outer.width, outer.height] as const,
     // Link boxes in texels of the inner image, for the clickable overlay.

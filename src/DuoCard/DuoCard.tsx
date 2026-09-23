@@ -104,6 +104,7 @@ export function DuoCard(props: DuoCardProps) {
   // Closed or open, not on the way: the only states where the name takes a hover.
   const [resting, setResting] = useState(true);
   const [nameArea, setNameArea] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [edgeColors, setEdgeColors] = useState<{ closed: string; open: string } | null>(null);
   // The name's reveal. It shows while the mouse rests on the name, and whenever the card is not
   // fully closed, so a click that opens the card keeps the name readable.
   const revealRef = useRef({ value: 0, hovering: false });
@@ -214,6 +215,7 @@ export function DuoCard(props: DuoCardProps) {
         meter?.benchmark(renderer.bench);
         setLinks(renderer.links);
         setNameArea(renderer.nameArea);
+        setEdgeColors(renderer.edgeColors);
         setSupported(true);
         fetchContributions(props.github.login, contributions.signal).then(
           (days) => {
@@ -285,6 +287,24 @@ export function DuoCard(props: DuoCardProps) {
     // The card content is drawn once per mount, and again for a new layout.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout]);
+
+  // Filling the screen, the card at rest also sets the colour of the browser's own bars: the colour
+  // along its edge, the front's closed and the home screen's open. Chrome and older Safari read it
+  // from the theme-color, Safari 26 from the background of the fixed viewport, which the card covers.
+  // On the way the page shows round the card, and the bars take the page's colour again.
+  const barColor = fullscreen && resting && edgeColors ? (open ? edgeColors.open : edgeColors.closed) : null;
+  useEffect(() => {
+    if (!barColor) return;
+    let meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    const added = !meta;
+    meta ??= document.head.appendChild(Object.assign(document.createElement("meta"), { name: "theme-color" }));
+    const page = meta.content;
+    meta.content = barColor;
+    return () => {
+      if (added) meta.remove();
+      else meta.content = page;
+    };
+  }, [barColor]);
 
   // Where the cover's free edge draws: on the page in model units after the pan, filling the screen
   // in view widths.
@@ -397,7 +417,7 @@ export function DuoCard(props: DuoCardProps) {
       <div
         ref={viewportRef}
         className="duo-viewport"
-        style={fullscreen ? undefined : { aspectRatio: `${FRAME_UNITS.width} / ${FRAME_UNITS.height}` }}
+        style={fullscreen ? { backgroundColor: barColor ?? undefined } : { aspectRatio: `${FRAME_UNITS.width} / ${FRAME_UNITS.height}` }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

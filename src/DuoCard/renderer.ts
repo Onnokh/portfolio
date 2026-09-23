@@ -274,6 +274,7 @@ export async function createRenderer(
     contributions: (days: ContributionDay[]) => maps.contributions(days),
     links: maps.links,
     nameArea: maps.nameArea,
+    edgeColors: maps.edgeColors,
     innerSize: maps.innerSize,
     dispose: () => gpu.dispose(),
   };
