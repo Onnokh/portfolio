@@ -65,12 +65,15 @@ export const CLOSED_VIEW = { lo: spineEdge(Math.PI) + FULLSCREEN_INSET, hi: -INN
 
 /**
  * What differs between the layouts: how tall the card is, and its corners. Both screens are
- * `screenHeight` tall and centred on y = 0, with corners of `screenRadius`.
+ * `screenHeight` tall and centred on y = 0, with corners of `screenRadius`. `frontBand` is the black
+ * that shows left of the closed front at rest and not on its other sides; the front's content moves
+ * left by it, so the content sits evenly in the black around it.
  */
-export type Shape = { halfHeight: number; cornerRadius: number; screenHeight: number; screenRadius: number };
+export type Shape = { halfHeight: number; cornerRadius: number; screenHeight: number; screenRadius: number; frontBand: number };
 
-// The card on a page, in the reference's proportions.
-export const CARD_SHAPE: Shape = { halfHeight: 5.95, cornerRadius: 1.05, screenHeight: 11.1, screenRadius: 0.62 };
+// The card on a page, in the reference's proportions. A bezel shows all round the front, as wide as
+// the band beside it.
+export const CARD_SHAPE: Shape = { halfHeight: 5.95, cornerRadius: 1.05, screenHeight: 11.1, screenRadius: 0.62, frontBand: 0 };
 
 /**
  * The card that fills a phone's screen, one page at a time. The closed view and the screens' full
@@ -81,7 +84,9 @@ export const CARD_SHAPE: Shape = { halfHeight: 5.95, cornerRadius: 1.05, screenH
  */
 export function fullscreenShape(aspect: number): Shape {
   const screenHeight = (CLOSED_VIEW.hi - CLOSED_VIEW.lo) / aspect + 2 * FULLSCREEN_INSET;
-  return { halfHeight: screenHeight / 2 + BEZEL, cornerRadius: BEZEL, screenHeight, screenRadius: 0 };
+  // At rest no bezel shows, only the band between the spine and the front.
+  const frontBand = FRONT_PAGE.x - BODY.hingeHalfWidth;
+  return { halfHeight: screenHeight / 2 + BEZEL, cornerRadius: BEZEL, screenHeight, screenRadius: 0, frontBand };
 }
 
 /**

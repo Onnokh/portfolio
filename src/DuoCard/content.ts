@@ -353,7 +353,17 @@ const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) *
  * rests on it and while the card is open. The inside right page repeats the front in the same box,
  * so the front lies exactly on its copy; with `status` that copy also has the corner status.
  */
-function drawFront(ctx: CanvasRenderingContext2D, left: number, width: number, height: number, content: CardContent, fonts: Fonts, reveal: number, status = false) {
+function drawFront(
+  ctx: CanvasRenderingContext2D,
+  left: number,
+  width: number,
+  height: number,
+  margin: number,
+  content: CardContent,
+  fonts: Fonts,
+  reveal: number,
+  status = false,
+) {
   const { px, py } = page(ctx, left);
   const setSize = (size: number) => {
     ctx.font = font(400, size, fonts.display);
@@ -387,14 +397,14 @@ function drawFront(ctx: CanvasRenderingContext2D, left: number, width: number, h
   }));
   // Revealed: each word justified to the margins, the block centred above the small print.
   const GAP = 8;
-  const sizes = inks.map((ink) => (width - PAD * 2) / ink.width);
+  const sizes = inks.map((ink) => (width - margin - PAD) / ink.width);
   const block = sizes.reduce((sum, size) => sum + size * cap, 0) + GAP * (words.length - 1);
   let y = PAD + (height - PAD * 2 - SMALL_PRINT - block) / 2;
   const revealed = sizes.map((size) => {
     y += size * cap;
     const baseline = y;
     y += GAP;
-    return { size, x: PAD, baseline };
+    return { size, x: margin, baseline };
   });
 
   // Each line eases on its own, a little after the one above it; sizes ease on a log scale.
@@ -414,9 +424,9 @@ function drawFront(ctx: CanvasRenderingContext2D, left: number, width: number, h
   ctx.font = font(500, 6, fonts.mono);
   ctx.letterSpacing = `${0.08 * 6 * CARD_PX}px`;
   ctx.fillStyle = PAPER;
-  ctx.fillText([content.role, content.footnote ?? ""].filter(Boolean).join(" - ").toUpperCase(), px(PAD), py(height - PAD - 9));
+  ctx.fillText([content.role, content.footnote ?? ""].filter(Boolean).join(" - ").toUpperCase(), px(margin), py(height - PAD - 9));
   ctx.fillStyle = "#8a8a86";
-  ctx.fillText(content.handle.toUpperCase(), px(PAD), py(height - PAD));
+  ctx.fillText(content.handle.toUpperCase(), px(margin), py(height - PAD));
   if (status) drawStatus(ctx, px, py, width, fonts);
   ctx.restore();
 }
@@ -424,7 +434,15 @@ function drawFront(ctx: CanvasRenderingContext2D, left: number, width: number, h
 /** The inner image's size in texels: both pages, `height` tall. */
 const innerSize = (shape: Shape) => [Math.round(INNER_SCREEN.width * TEXELS_PER_UNIT), Math.round(shape.screenHeight * TEXELS_PER_UNIT)] as const;
 
-function drawInner(content: CardContent, fonts: Fonts, assets: HomeAssets, [width, height]: readonly [number, number], reveal = 0, into?: HTMLCanvasElement) {
+function drawInner(
+  content: CardContent,
+  fonts: Fonts,
+  assets: HomeAssets,
+  [width, height]: readonly [number, number],
+  frontMargin: number,
+  reveal = 0,
+  into?: HTMLCanvasElement,
+) {
   const canvas = into ?? Object.assign(document.createElement("canvas"), { width, height });
   const ctx = canvas.getContext("2d")!;
   // The left half is the home screen's wallpaper; the right half is black up to the fold, so the
@@ -450,20 +468,20 @@ function drawInner(content: CardContent, fonts: Fonts, assets: HomeAssets, [widt
   const rightX = (FRONT_PAGE.x - INNER_SCREEN.x) * TEXELS_PER_UNIT;
   const rightWidth = (FRONT_PAGE.width * TEXELS_PER_UNIT) / CARD_PX;
   // The inside copy also carries the status in its corner, so it shows only once the card opens.
-  drawFront(ctx, rightX, rightWidth, pageHeight, content, fonts, reveal, true);
+  drawFront(ctx, rightX, rightWidth, pageHeight, frontMargin, content, fonts, reveal, true);
   // The name on the right page, above the small print, in texels: the area that reveals it on hover.
   const nameArea = { x: rightX, y: 0, width: rightWidth * CARD_PX, height: (pageHeight - PAD - SMALL_PRINT) * CARD_PX };
 
   return { canvas, links: [...widget.links, ...apps], nameArea };
 }
 
-function drawOuter(content: CardContent, fonts: Fonts, height: number, reveal = 0, into?: HTMLCanvasElement) {
+function drawOuter(content: CardContent, fonts: Fonts, height: number, frontMargin: number, reveal = 0, into?: HTMLCanvasElement) {
   const width = Math.round(FRONT_PAGE.width * TEXELS_PER_UNIT);
   const canvas = into ?? Object.assign(document.createElement("canvas"), { width, height });
   const ctx = canvas.getContext("2d")!;
   ctx.fillStyle = PAPER;
   ctx.fillRect(0, 0, width, height);
-  drawFront(ctx, 0, width / CARD_PX, height / CARD_PX, content, fonts, reveal);
+  drawFront(ctx, 0, width / CARD_PX, height / CARD_PX, frontMargin, content, fonts, reveal);
   return canvas;
 }
 
@@ -516,14 +534,16 @@ export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts
   const size = innerSize(shape);
   const [width, height] = size;
   const assets: HomeAssets = { icons, wallpaper: wallpaper && blurredCover(wallpaper, width / 2, height, WALLPAPER_BLUR) };
-  const inner = drawInner(content, fonts, assets, size);
-  const outer = drawOuter(content, fonts, height);
+  // The front's left margin, in card pixels: the page margin, less the band that shows beside it.
+  const frontMargin = PAD - (shape.frontBand * TEXELS_PER_UNIT) / CARD_PX;
+  const inner = drawInner(content, fonts, assets, size, frontMargin);
+  const outer = drawOuter(content, fonts, height, frontMargin);
   const innerMips = mipTexture(gpu, inner.canvas.width, inner.canvas.height, "card:inner");
   const outerMips = mipTexture(gpu, outer.width, outer.height, "card:outer");
   innerMips.write(inner.canvas);
   outerMips.write(outer);
   let innerReveal = 0;
-  const redrawInner = () => innerMips.write(drawInner(content, fonts, assets, size, innerReveal, inner.canvas).canvas);
+  const redrawInner = () => innerMips.write(drawInner(content, fonts, assets, size, frontMargin, innerReveal, inner.canvas).canvas);
   return {
     inner: innerMips.tex,
     outer: outerMips.tex,
@@ -532,7 +552,7 @@ export async function createContent(gpu: Gpu, content: CardContent, fonts: Fonts
       if (face === "inner") {
         innerReveal = t;
         redrawInner();
-      } else outerMips.write(drawOuter(content, fonts, height, t, outer));
+      } else outerMips.write(drawOuter(content, fonts, height, frontMargin, t, outer));
     },
     // Takes the contribution graph's days once they arrive, and redraws the page they are on.
     contributions(days: ContributionDay[]) {
