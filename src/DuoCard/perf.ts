@@ -1,7 +1,8 @@
 /**
- * Frame timing for the card, on with `?perf` in the URL. Every run of frames that draw, such as one
- * open or close, is one session. At its end the session's summary goes to the console, to a small
- * panel in the top left corner, and to `window.__duoPerf.sessions`, so a script can read it too.
+ * Frame timing for the card, on with `?perf` or `?debug=true` in the URL. Every run of frames that
+ * draw, such as one open or close, is one session. At its end the session's summary goes to the
+ * console, to a small panel in the top left corner, and to `window.__duoPerf.sessions`, so a script
+ * can read it too.
  *
  * - `interval`: time between animation frames. A frame the display had to show twice counts as
  *   dropped; the display's period is the middle interval while the card is still.
@@ -55,7 +56,11 @@ declare global {
   }
 }
 
-export const perfEnabled = () => typeof location !== "undefined" && new URLSearchParams(location.search).has("perf");
+export const perfEnabled = () => {
+  if (typeof location === "undefined") return false;
+  const params = new URLSearchParams(location.search);
+  return params.has("perf") || params.get("debug") === "true";
+};
 
 // Frames without a draw that end a session, so the one still frame between two draws does not split it.
 const END_AFTER = 4;
