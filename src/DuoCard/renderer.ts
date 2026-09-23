@@ -13,6 +13,7 @@ import {
 } from "./geometry";
 import { createContent, type CardContent, type Fonts } from "./content";
 import type { ContributionDay } from "./github";
+import type { Meter } from "./perf";
 import { bodyShader, presentShader, shadowShader } from "./shaders";
 
 // Camera from the reference: a fixed eye 40 units in front of the card, which is also the eye the
@@ -115,7 +116,14 @@ function perspective(fovY: number, aspect: number, pan: number) {
 
 export type Renderer = Awaited<ReturnType<typeof createRenderer>>;
 
-export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HTMLCanvasElement, content: CardContent, fonts: Fonts, layout: Layout) {
+export async function createRenderer(
+  canvas: HTMLCanvasElement,
+  shadowCanvas: HTMLCanvasElement,
+  content: CardContent,
+  fonts: Fonts,
+  layout: Layout,
+  meter: Meter | null = null,
+) {
   if (!("gpu" in navigator)) throw new Error("WebGPU is not available");
   const gpu = await init();
   gpu.onError((error) => console.error("[duo-card]", error));
@@ -160,16 +168,20 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
   const drawn = { inner: 0, outer: 0 };
 
   // Redraws a face only while it is in view: the front unless the card lies open, the inside
-  // unless it lies closed. A face out of view catches up when it comes back.
+  // unless it lies closed. A face out of view catches up when it comes back. True if it drew one.
   function syncReveal() {
+    let drew = false;
     if (angle < 180 && drawn.outer !== reveal) {
       maps.reveal("outer", reveal);
       drawn.outer = reveal;
+      drew = true;
     }
     if (angle > 0 && drawn.inner !== reveal) {
       maps.reveal("inner", reveal);
       drawn.inner = reveal;
+      drew = true;
     }
+    return drew;
   }
 
   // The fullscreen layout's view at the current angle; the page layout frames FRAME_UNITS.
@@ -205,7 +217,8 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
   function render(next: number, nameReveal = 0) {
     angle = next;
     reveal = nameReveal;
-    syncReveal();
+    if (meter) meter.faces(syncReveal);
+    else syncReveal();
     body.set({ scene: uniforms() });
     const [shadowWidth, shadowHeight] = shadowSurface.size;
     // The shadow canvas frames the card's plane the same way the card's canvas does: on the page
@@ -226,10 +239,37 @@ export async function createRenderer(canvas: HTMLCanvasElement, shadowCanvas: HT
       f.pass(canvasSurface, present);
       f.pass(shadowSurface, shadow);
     });
+    meter?.submitted(gpu.gpu.queue.onSubmittedWorkDone());
+  }
+
+  /**
+   * For the perf meter: draws both faces `n` times back to back, then the card `n` times on the way
+   * open, and returns the milliseconds each draw takes once the GPU is done with it. Leaves the
+   * card as it was.
+   */
+  async function bench(n: number) {
+    const time = async (fn: (i: number) => void) => {
+      const start = performance.now();
+      for (let i = 0; i < n; i++) fn(i);
+      await gpu.gpu.queue.onSubmittedWorkDone();
+      return (performance.now() - start) / n;
+    };
+    const [restAngle, restReveal] = [angle, reveal];
+    const faces = await time((i) => {
+      maps.reveal("outer", i / n);
+      maps.reveal("inner", i / n);
+    });
+    maps.reveal("outer", restReveal);
+    maps.reveal("inner", restReveal);
+    drawn.outer = drawn.inner = restReveal;
+    const card = await time((i) => render(30 + (120 * i) / n, restReveal));
+    render(restAngle, restReveal);
+    return { faces, card };
   }
 
   return {
     render,
+    bench,
     // New days for the contribution graph: the inside is redrawn; render again to show it.
     contributions: (days: ContributionDay[]) => maps.contributions(days),
     links: maps.links,

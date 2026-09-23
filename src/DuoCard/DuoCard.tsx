@@ -6,6 +6,7 @@ import { PixelMark } from "../BusinessCard/PixelMark";
 import { BODY, INNER_SCREEN, layoutShape, type Layout } from "./geometry";
 import { TEXELS_PER_UNIT, type HomeApp, type LinkRect } from "./content";
 import { fetchContributions } from "./github";
+import { createMeter, perfEnabled } from "./perf";
 import {
   EYE_Z,
   FRAME_UNITS,
@@ -180,6 +181,7 @@ export function DuoCard(props: DuoCardProps) {
     let disposed = false;
     let frameId = 0;
     const contributions = new AbortController();
+    const meter = perfEnabled() ? createMeter() : null;
     const style = getComputedStyle(root);
     const fonts = {
       sans: style.fontFamily,
@@ -201,6 +203,7 @@ export function DuoCard(props: DuoCardProps) {
       },
       fonts,
       layout,
+      meter,
     ).then(
       (renderer) => {
         if (disposed) {
@@ -208,6 +211,7 @@ export function DuoCard(props: DuoCardProps) {
           return;
         }
         rendererRef.current = renderer;
+        meter?.benchmark(renderer.bench);
         setLinks(renderer.links);
         setNameArea(renderer.nameArea);
         setSupported(true);
@@ -222,7 +226,8 @@ export function DuoCard(props: DuoCardProps) {
           },
         );
         let last = performance.now();
-        const tick = (now: number) => {
+        // One frame: moves the card on by `dt`, and draws it if anything changed. True if it drew.
+        const step = (now: number) => {
           const dt = Math.min((now - last) / 1000, 0.05);
           last = now;
           const motion = motionRef.current;
@@ -243,10 +248,14 @@ export function DuoCard(props: DuoCardProps) {
             reveal.value = target > reveal.value ? Math.min(target, reveal.value + step) : Math.max(target, reveal.value - step);
             dirtyRef.current = true;
           }
-          if (dirtyRef.current) {
-            dirtyRef.current = false;
-            renderer.render(angleRef.current, reveal.value);
-          }
+          if (!dirtyRef.current) return false;
+          dirtyRef.current = false;
+          renderer.render(angleRef.current, reveal.value);
+          return true;
+        };
+        const tick = (now: number) => {
+          if (meter) meter.frame(now, () => step(now));
+          else step(now);
           frameId = requestAnimationFrame(tick);
         };
         frameId = requestAnimationFrame(tick);
@@ -266,6 +275,7 @@ export function DuoCard(props: DuoCardProps) {
       disposed = true;
       contributions.abort();
       cancelAnimationFrame(frameId);
+      meter?.dispose();
       observer.disconnect();
       rendererRef.current?.dispose();
       rendererRef.current = null;
