@@ -1,0 +1,337 @@
+.bc {
+  --bc-ink: #0a0a0a;
+  --bc-paper: #fff;
+  --bc-muted: #737373;
+  --bc-track: #e5e5e5;
+  --bc-mono: ui-monospace, "Geist Mono", "SF Mono", SFMono-Regular, Menlo, monospace;
+  --bc-window-radius: calc(var(--bc-radius) - var(--bc-border));
+  --bc-window-hinge-radius: max(0px, calc(var(--bc-hinge-radius) - var(--bc-border)));
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+  width: 100%;
+  color: var(--bc-ink);
+}
+
+.bc :where(p, dl, dd) {
+  margin: 0;
+}
+
+.bc-viewport {
+  position: relative;
+}
+
+.bc-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(var(--bc-w) * 2);
+  height: var(--bc-h);
+  transform-origin: 0 0;
+  perspective: var(--bc-perspective);
+  perspective-origin: 50% 50%;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.bc-base,
+.bc-silhouette,
+.bc-window {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: auto;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.bc[data-dragging] .bc-stage * {
+  cursor: grabbing;
+}
+
+/* The page under the cover. It holds the inside right page. */
+.bc-base {
+  width: var(--bc-w);
+  height: var(--bc-h);
+  box-sizing: border-box;
+  overflow: hidden;
+  transform: translateX(var(--bc-hinge));
+  background: var(--bc-paper);
+  border: var(--bc-border) solid var(--bc-ink);
+  border-left: 0;
+  border-radius: var(--bc-hinge-radius) var(--bc-radius) var(--bc-radius) var(--bc-hinge-radius);
+}
+
+.bc-base::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / var(--bc-cast));
+  pointer-events: none;
+}
+
+/* The cover in real 3D. Only its outline shows: the wedges above and below the card, and the rim. */
+.bc-silhouette {
+  width: var(--bc-w);
+  height: var(--bc-h);
+  transform-origin: 0 50%;
+  transform: translateX(var(--bc-hinge)) rotateY(var(--bc-angle));
+  background: var(--bc-ink);
+  border-radius: var(--bc-hinge-radius) var(--bc-radius) var(--bc-radius) var(--bc-hinge-radius);
+}
+
+/* The visible face of the cover, flat, clipped to the projected width of the silhouette. */
+.bc-window {
+  top: var(--bc-border);
+  width: var(--bc-window-width);
+  height: calc(var(--bc-h) - var(--bc-border) * 2);
+  overflow: hidden;
+  transform: translateX(var(--bc-window-left));
+  background: var(--bc-paper);
+}
+
+.bc[data-side="front"] .bc-window {
+  --bc-free-side: to right;
+  --bc-hinge-shade: 0.04;
+  border-radius: var(--bc-window-hinge-radius) var(--bc-window-radius) var(--bc-window-radius)
+    var(--bc-window-hinge-radius);
+}
+
+.bc[data-side="back"] .bc-window {
+  --bc-free-side: to left;
+  --bc-hinge-shade: 0.4;
+  border-radius: var(--bc-window-radius) var(--bc-window-hinge-radius) var(--bc-window-hinge-radius)
+    var(--bc-window-radius);
+}
+
+.bc-face {
+  position: absolute;
+  inset: 0;
+}
+
+.bc[data-side="front"] .bc-face--back,
+.bc[data-side="back"] .bc-face--front {
+  visibility: hidden;
+}
+
+/* Blur grows toward the free edge as the face turns away. Both masks span the visible window,
+   not the whole page, so the fade always ends at the free edge. */
+.bc-face-sharp,
+.bc-face-blurred {
+  -webkit-mask-size: var(--bc-window-width) 100%;
+  mask-size: var(--bc-window-width) 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+.bc-face-sharp {
+  -webkit-mask-image: linear-gradient(var(--bc-free-side), #000 25%, transparent 95%);
+  mask-image: linear-gradient(var(--bc-free-side), #000 25%, transparent 95%);
+}
+
+.bc-face-blurred {
+  filter: blur(calc(var(--bc-turn) * 5px));
+  -webkit-mask-image: linear-gradient(var(--bc-free-side), transparent 25%, #000 95%);
+  mask-image: linear-gradient(var(--bc-free-side), transparent 25%, #000 95%);
+}
+
+/* At rest the face is flat: one sharp copy, no masks. */
+.bc[data-resting] .bc-face-sharp {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+.bc[data-resting] .bc-face-blurred {
+  display: none;
+}
+
+.bc-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    var(--bc-free-side),
+    rgb(0 0 0 / calc(var(--bc-turn) * var(--bc-hinge-shade))),
+    rgb(0 0 0 / calc(var(--bc-turn) * 0.65))
+  );
+}
+
+/* Page layout. The front and the inside right page share the header and signature positions,
+   so the name and handle stay in place while the cover lifts off them. */
+.bc-page {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: calc(var(--bc-w) - var(--bc-border) * 2);
+  height: calc(var(--bc-h) - var(--bc-border) * 2);
+  padding: 18px;
+}
+
+.bc-page--inside {
+  padding-left: calc(18px + var(--bc-border));
+}
+
+.bc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 16px;
+}
+
+.bc-monogram {
+  display: flex;
+}
+
+.bc-mono {
+  font-family: var(--bc-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.bc-muted {
+  color: var(--bc-muted);
+}
+
+.bc-links {
+  display: grid;
+  gap: 4px;
+  margin-top: 84px;
+  font-family: var(--bc-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.bc-link {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bc-link a {
+  color: inherit;
+  text-decoration: none;
+  text-underline-offset: 3px;
+  -webkit-user-drag: none;
+}
+
+.bc-link a:hover {
+  text-decoration: underline;
+}
+
+.bc-link a:focus-visible {
+  outline: 2px solid var(--bc-ink);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.bc-signature {
+  margin-top: auto;
+}
+
+.bc-name {
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+}
+
+.bc-role {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--bc-muted);
+}
+
+.bc-avatar {
+  display: block;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  -webkit-user-drag: none;
+}
+
+.bc-about {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.bc-tagline {
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+}
+
+/* Controls */
+.bc-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.bc-hint {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--bc-muted);
+}
+
+.bc-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.bc-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--bc-ink) calc(7px + var(--bc-p) * (100% - 14px)),
+    var(--bc-track) 0
+  );
+}
+
+.bc-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--bc-ink);
+}
+
+.bc-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bc-track);
+}
+
+.bc-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bc-ink);
+}
+
+.bc-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bc-ink);
+}
+
+.bc-slider:focus-visible {
+  outline: 2px solid var(--bc-ink);
+  outline-offset: 4px;
+  border-radius: 4px;
+}

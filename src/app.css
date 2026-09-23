@@ -1,0 +1,24 @@
+:root {
+  font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: #0a0a0a;
+  background: #f6f6f3;
+}
+
+body {
+  margin: 0;
+}
+
+.page {
+  display: grid;
+  place-items: center;
+  min-height: 100svh;
+  padding: 24px;
+  box-sizing: border-box;
+  /* The card's shadow reaches past its box; on a narrow screen it must not make the page scroll. */
+  overflow: clip;
+}
+
+.stage {
+  width: min(840px, 100%);
+}
