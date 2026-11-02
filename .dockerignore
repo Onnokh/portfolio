@@ -8,3 +8,5 @@ dist
 Dockerfile
 .dockerignore
 docker-compose.yml
+# The Remotion video of the card: not part of the site.
+video

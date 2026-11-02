@@ -276,6 +276,8 @@ export async function createRenderer(
     nameArea: maps.nameArea,
     edgeColors: maps.edgeColors,
     innerSize: maps.innerSize,
+    // Settles once the GPU is done with all the work sent so far, such as the last render.
+    settled: () => gpu.gpu.queue.onSubmittedWorkDone(),
     dispose: () => gpu.dispose(),
   };
 }
