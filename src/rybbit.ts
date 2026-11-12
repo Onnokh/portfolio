@@ -12,7 +12,7 @@
 
 const SCRIPT_ID = "rybbit-analytics";
 const SITE_ID: string | undefined = import.meta.env.VITE_RYBBIT_SITE_ID;
-const SCRIPT_SRC: string = import.meta.env.VITE_RYBBIT_SCRIPT_SRC ?? "https://rybbit.missingmounts.com/api/script.js";
+const SCRIPT_SRC: string = import.meta.env.VITE_RYBBIT_SCRIPT_SRC ?? "https://rybbit.onkie.dev/api/script.js";
 
 const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
 
